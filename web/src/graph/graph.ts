@@ -308,6 +308,10 @@ export class GraphView {
     }, { passive: false })
 
     this.#svg.addEventListener('pointerdown', (event) => {
+      const target = event.target as Element | null
+      if (target?.closest('.edge-hit') || target?.closest('.graph-node')) {
+        return
+      }
       this.#svg.setPointerCapture(event.pointerId)
       this.#pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
       if (this.#pointers.size === 1) {
@@ -547,4 +551,5 @@ function stateLabel(state: SessionView['state']): string {
 }
 
 export { GRAPH_HEIGHT, GRAPH_WIDTH }
+
 
