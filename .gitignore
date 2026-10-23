@@ -1,0 +1,22 @@
+# Go build artifacts
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Frontend
+web/node_modules/
+web/dist/
+internal/web/dist/*
+!internal/web/dist/.gitkeep
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local runtime artifacts
+*.log
+/tmp/
