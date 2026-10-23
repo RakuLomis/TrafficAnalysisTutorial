@@ -55,6 +55,14 @@
               <div><dt>教师鉴权</dt><dd id="teacher-ws-status">未认证</dd></div>
             </dl>
             <p class="muted">点击拓扑中的会话边，查看 A 实际收到的应用消息。教师连接不计入学生人数。</p>
+            <h3>课堂控制</h3>
+            <div class="control-row">
+              <button id="round-new-button" type="button" class="secondary">新一轮</button>
+              <button id="round-end-button" type="button" class="secondary">结束课堂</button>
+              <button id="round-start-button" type="button" hidden>开始课堂</button>
+              <button id="shutdown-button" type="button" class="danger">退出程序</button>
+            </div>
+            <p id="control-status" class="muted"></p>
           </section>
         </section>
 
@@ -102,3 +110,4 @@
     <script type="module" src="/src/teacher/main.ts"></script>
   </body>
 </html>
+

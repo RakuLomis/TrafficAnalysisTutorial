@@ -38,9 +38,14 @@ type Hub struct {
 	now     func() time.Time
 	roundID atomic.Value
 
-	commands chan Command
-	done     chan struct{}
-	stopOnce sync.Once
+	commands         chan Command
+	done             chan struct{}
+	stopOnce         sync.Once
+	shutdownOnce     sync.Once
+	shutdownRequests chan struct{}
+
+	operations     map[string]operationResult
+	operationOrder []string
 
 	startedAt time.Time
 	observe   *observe.Store
@@ -172,6 +177,12 @@ func (c snapshotCommand) apply(h *Hub) {
 	}
 }
 
+type operationResult struct {
+	Action          string
+	ExpectedRoundID string
+	Round           protocol.RoundView
+}
+
 type Snapshot struct {
 	Round           Round
 	TopologyVersion uint64
@@ -213,14 +224,16 @@ func newHubWithOptions(cfg config.Config, logger *slog.Logger, now func() time.T
 		return nil, fmt.Errorf("create initial round: %w", err)
 	}
 	h := &Hub{
-		cfg:       cfg,
-		options:   options,
-		logger:    logger,
-		now:       now,
-		commands:  make(chan Command, 256),
-		done:      make(chan struct{}),
-		startedAt: round.CreatedAt,
-		observe:   observe.New(cfg.SessionHistoryCount, cfg.SessionHistoryBytes, cfg.GlobalHistoryBytes),
+		cfg:              cfg,
+		options:          options,
+		logger:           logger,
+		now:              now,
+		commands:         make(chan Command, 256),
+		done:             make(chan struct{}),
+		shutdownRequests: make(chan struct{}),
+		operations:       make(map[string]operationResult),
+		startedAt:        round.CreatedAt,
+		observe:          observe.New(cfg.SessionHistoryCount, cfg.SessionHistoryBytes, cfg.GlobalHistoryBytes),
 		state: hubState{
 			round:        round,
 			participants: make(map[string]*Participant),
@@ -273,6 +286,10 @@ func (h *Hub) StartTimers(ctx context.Context, interval time.Duration) {
 			}
 		}
 	}()
+}
+
+func (h *Hub) ShutdownRequests() <-chan struct{} {
+	return h.shutdownRequests
 }
 
 func (h *Hub) RoundID() string {
@@ -356,6 +373,11 @@ func (h *Hub) disconnect(epoch string) error {
 	if conn.ParticipantID != "" {
 		if participant, ok := h.state.participants[conn.ParticipantID]; ok && participant.ConnectionEpoch == epoch {
 			participant.MarkOffline(h.now())
+			for _, session := range h.state.sessions {
+				if session.IsOpen() && session.Contains(participant.ID) {
+					h.closeSession(session, "peer_offline")
+				}
+			}
 		}
 	}
 	h.broadcastTopology()
@@ -389,7 +411,7 @@ func (h *Hub) handleMessage(epoch string, message protocol.Message, wsBytes int)
 	case *protocol.Join:
 		h.handleJoin(conn, msg)
 	case *protocol.Resume:
-		h.sendError(conn, protocol.CodeResumeExpired, "resume is not available in this build", msg.RequestID, "")
+		h.handleResume(conn, msg)
 	case *protocol.AdminAuth:
 		h.handleAdminAuth(conn, msg)
 	default:
@@ -397,6 +419,14 @@ func (h *Hub) handleMessage(epoch string, message protocol.Message, wsBytes int)
 			switch msg := message.(type) {
 			case *protocol.ObserverSubscribe:
 				h.handleObserverSubscribe(conn, msg)
+			case *protocol.RoundReset:
+				h.handleRoundControl(conn, msg.RequestID, msg.ExpectedRoundID, "reset")
+			case *protocol.ClassEnd:
+				h.handleRoundControl(conn, msg.RequestID, msg.ExpectedRoundID, "end")
+			case *protocol.ClassStart:
+				h.handleRoundControl(conn, msg.RequestID, msg.ExpectedRoundID, "start")
+			case *protocol.ServerShutdown:
+				h.handleServerShutdown(conn, msg.RequestID)
 			default:
 				h.sendError(conn, protocol.CodeForbidden, "admin action is not available yet", requestIDOf(message), "")
 			}
@@ -435,6 +465,88 @@ func (h *Hub) handleMessage(epoch string, message protocol.Message, wsBytes int)
 	}
 }
 
+func (h *Hub) handleResume(conn *Connection, msg *protocol.Resume) {
+	if conn.State != ConnectionPending {
+		h.sendError(conn, protocol.CodeInvalidMessage, "connection already joined", msg.RequestID, "")
+		return
+	}
+	if conn.Admin {
+		h.sendError(conn, protocol.CodeForbidden, "admin connection cannot resume a student", msg.RequestID, "")
+		return
+	}
+	if h.state.round.Status == RoundEnded {
+		h.sendError(conn, protocol.CodeClassEnded, "class has ended", msg.RequestID, "")
+		return
+	}
+	if msg.RoundID != h.state.round.ID {
+		h.sendError(conn, protocol.CodeStaleRound, "round has changed", msg.RequestID, "")
+		return
+	}
+	participantID, ok := h.state.resumeTokens[msg.ResumeToken]
+	if !ok {
+		h.sendError(conn, protocol.CodeResumeExpired, "resume token is invalid or expired", msg.RequestID, "")
+		return
+	}
+	participant, ok := h.state.participants[participantID]
+	if !ok || participant.State == ParticipantRemoved {
+		delete(h.state.resumeTokens, msg.ResumeToken)
+		h.sendError(conn, protocol.CodeResumeExpired, "identity is no longer available", msg.RequestID, "")
+		return
+	}
+	now := h.now()
+	if participant.State == ParticipantOffline && !participant.OfflineSince.IsZero() && now.Sub(participant.OfflineSince) > h.cfg.ResumeWindow {
+		h.removeParticipant(participantID)
+		h.broadcastTopology()
+		h.sendError(conn, protocol.CodeResumeExpired, "resume window has expired", msg.RequestID, "")
+		return
+	}
+
+	oldEpoch := participant.ConnectionEpoch
+	if oldEpoch != "" {
+		if oldConn, ok := h.state.connections[oldEpoch]; ok && oldConn.Epoch != conn.Epoch {
+			delete(h.state.connections, oldEpoch)
+			oldConn.Close()
+			if oldConn.Peer != nil {
+				oldConn.Peer.Close("resumed")
+			}
+		}
+	}
+	for _, session := range h.state.sessions {
+		if session.IsOpen() && session.Contains(participantID) {
+			h.closeSession(session, "peer_offline")
+		}
+	}
+
+	newToken, err := protocol.NewToken()
+	if err != nil {
+		h.sendError(conn, protocol.CodeInternal, "cannot rotate resume token", msg.RequestID, "")
+		return
+	}
+	delete(h.state.resumeTokens, msg.ResumeToken)
+	h.state.resumeTokens[newToken] = participantID
+	participant.MarkOnline(conn.Epoch)
+	conn.ParticipantID = participantID
+	conn.State = ConnectionStudent
+	h.state.topologyVersion++
+	markPeerJoined(conn)
+	view := h.publicSnapshot()
+	h.send(conn, &protocol.Welcome{
+		V:               1,
+		Type:            "welcome",
+		RequestID:       msg.RequestID,
+		ParticipantID:   participantID,
+		Nickname:        participant.Nickname,
+		ShortID:         participant.ShortID,
+		Color:           participant.Color,
+		ResumeToken:     newToken,
+		ConnectionEpoch: conn.Epoch,
+		Round:           h.roundView(),
+		TopologyVersion: h.state.topologyVersion,
+		Participants:    view.participants,
+		Sessions:        view.sessions,
+	})
+	h.broadcastTopology()
+}
 func (h *Hub) handleJoin(conn *Connection, msg *protocol.Join) {
 	if conn.State != ConnectionPending {
 		h.sendError(conn, protocol.CodeInvalidMessage, "connection already joined", msg.RequestID, "")
@@ -442,6 +554,10 @@ func (h *Hub) handleJoin(conn *Connection, msg *protocol.Join) {
 	}
 	if conn.Admin {
 		h.sendError(conn, protocol.CodeForbidden, "admin connection cannot join as a student", msg.RequestID, "")
+		return
+	}
+	if h.state.round.Status == RoundEnded {
+		h.sendError(conn, protocol.CodeClassEnded, "class has ended", msg.RequestID, "")
 		return
 	}
 	if msg.RoundID != h.state.round.ID {
@@ -681,6 +797,147 @@ func (h *Hub) handleSessionClose(conn *Connection, msg *protocol.SessionClose) {
 	h.closeSession(session, msg.Reason)
 }
 
+func (h *Hub) handleRoundControl(conn *Connection, requestID, expectedRoundID, action string) {
+	if cached, ok := h.operations[requestID]; ok {
+		if cached.Action != action || cached.ExpectedRoundID != expectedRoundID {
+			h.sendError(conn, protocol.CodeIDConflict, "request id reused with different payload", requestID, "")
+			return
+		}
+		h.send(conn, &protocol.RoundChanged{
+			V:         1,
+			Type:      "round.changed",
+			RequestID: requestID,
+			Round:     cached.Round,
+			Action:    cached.Action,
+		})
+		return
+	}
+	if expectedRoundID != h.state.round.ID {
+		h.sendError(conn, protocol.CodeStaleRound, "expected round does not match", requestID, "")
+		return
+	}
+	switch action {
+	case "reset", "end":
+		if h.state.round.Status != RoundRunning {
+			h.sendError(conn, protocol.CodeInvalidMessage, "class is not running", requestID, "")
+			return
+		}
+	case "start":
+		if h.state.round.Status != RoundEnded {
+			h.sendError(conn, protocol.CodeInvalidMessage, "class has not ended", requestID, "")
+			return
+		}
+	}
+	round, err := h.performRound(action)
+	if err != nil {
+		h.sendError(conn, protocol.CodeInternal, "cannot create round", requestID, "")
+		return
+	}
+	h.rememberOperation(requestID, operationResult{Action: action, ExpectedRoundID: expectedRoundID, Round: round})
+	h.send(conn, &protocol.RoundChanged{
+		V:         1,
+		Type:      "round.changed",
+		RequestID: requestID,
+		Round:     round,
+		Action:    action,
+	})
+}
+
+func (h *Hub) performRound(action string) (protocol.RoundView, error) {
+	newID, err := protocol.NewID()
+	if err != nil {
+		return protocol.RoundView{}, err
+	}
+	reason := "reset"
+	if action == "end" {
+		reason = "class_end"
+	}
+	for epoch, connection := range h.state.connections {
+		if connection.State == ConnectionTeacher {
+			continue
+		}
+		if action != "start" {
+			h.send(connection, &protocol.RoundEnded{
+				V:          1,
+				Type:       "round.ended",
+				Reason:     reason,
+				NewRoundID: newID,
+			})
+		}
+		connection.Close()
+		if connection.Peer != nil {
+			connection.Peer.Close("round_ended")
+		}
+		delete(h.state.connections, epoch)
+	}
+	teachers := make(map[string]*Connection)
+	for epoch, connection := range h.state.connections {
+		if connection.State == ConnectionTeacher {
+			connection.Subscription = ""
+			teachers[epoch] = connection
+		}
+	}
+	h.state.connections = teachers
+	h.state.participants = make(map[string]*Participant)
+	h.state.sessions = make(map[string]*Session)
+	h.state.resumeTokens = make(map[string]string)
+	h.state.shortIDs = make(map[string]string)
+	h.state.pairSessions = make(map[string]string)
+	h.state.sendSeq = make(map[string]*seqState)
+	h.state.dedup = make(map[string]*dedupCache)
+	h.state.pending = make(map[string]*pendingMessage)
+	h.state.nextColor = 0
+	h.state.topologyVersion++
+	h.observe.Reset()
+	status := RoundRunning
+	if action == "end" {
+		status = RoundEnded
+	}
+	h.state.round = Round{ID: newID, Status: status, CreatedAt: h.now()}
+	h.roundID.Store(newID)
+	h.broadcastTopology()
+	return h.roundView(), nil
+}
+
+func (h *Hub) handleServerShutdown(conn *Connection, requestID string) {
+	round := h.roundView()
+	h.send(conn, &protocol.RoundChanged{
+		V:         1,
+		Type:      "round.changed",
+		RequestID: requestID,
+		Round:     round,
+		Action:    "shutdown",
+	})
+	for epoch, connection := range h.state.connections {
+		h.send(connection, &protocol.RoundEnded{
+			V:          1,
+			Type:       "round.ended",
+			Reason:     "shutdown",
+			NewRoundID: round.ID,
+		})
+		connection.Close()
+		if connection.Peer != nil {
+			connection.Peer.Close("server_shutdown")
+		}
+		delete(h.state.connections, epoch)
+	}
+	h.shutdownOnce.Do(func() {
+		close(h.shutdownRequests)
+	})
+}
+
+func (h *Hub) rememberOperation(requestID string, result operationResult) {
+	if _, exists := h.operations[requestID]; exists {
+		return
+	}
+	h.operations[requestID] = result
+	h.operationOrder = append(h.operationOrder, requestID)
+	for len(h.operationOrder) > 128 {
+		oldest := h.operationOrder[0]
+		h.operationOrder = h.operationOrder[1:]
+		delete(h.operations, oldest)
+	}
+}
 func (h *Hub) handleObserverSubscribe(conn *Connection, msg *protocol.ObserverSubscribe) {
 	if msg.SessionID == nil {
 		conn.Subscription = ""
@@ -1113,6 +1370,7 @@ func (h *Hub) closeSession(session *Session, reason string) {
 		return
 	}
 	session.Close(reason)
+	session.ClosedAt = h.now()
 	delete(h.state.pairSessions, PairKey(session.AID, session.BID))
 	h.state.topologyVersion++
 	h.sendSessionChanged(session)
@@ -1159,6 +1417,69 @@ func (h *Hub) expire(now time.Time) {
 			pending.ReceiptStatus = "unconfirmed"
 			h.sendStatus(pending, "unconfirmed", now)
 			h.updateObservationStatus(pending.SessionID, pending.MessageID, "unconfirmed")
+		}
+	}
+
+	topologyChanged := false
+	for participantID, participant := range h.state.participants {
+		if participant.State != ParticipantOffline || participant.OfflineSince.IsZero() {
+			continue
+		}
+		if !now.Before(participant.OfflineSince.Add(h.cfg.ResumeWindow)) {
+			h.removeParticipant(participantID)
+			topologyChanged = true
+		}
+	}
+	if topologyChanged {
+		h.broadcastTopology()
+	}
+	h.pruneClosedSessions(now)
+}
+
+func (h *Hub) pruneClosedSessions(now time.Time) {
+	var closed []*Session
+	for _, session := range h.state.sessions {
+		if session.State == SessionClosed {
+			closed = append(closed, session)
+		}
+	}
+	sort.Slice(closed, func(i, j int) bool {
+		return closed[i].ClosedAt.Before(closed[j].ClosedAt)
+	})
+	changed := false
+	for len(closed) > 0 {
+		session := closed[0]
+		expired := !session.ClosedAt.IsZero() && !now.Before(session.ClosedAt.Add(h.cfg.ClosedSessionTTL))
+		if len(closed) <= h.cfg.ClosedSessionMax && !expired {
+			break
+		}
+		delete(h.state.sessions, session.ID)
+		h.observe.Forget(session.ID)
+		h.cleanupSessionState(session.ID)
+		h.state.topologyVersion++
+		changed = true
+		closed = closed[1:]
+	}
+	if changed {
+		h.broadcastTopology()
+	}
+}
+
+func (h *Hub) cleanupSessionState(sessionID string) {
+	prefix := sessionID + "|"
+	for key := range h.state.pending {
+		if strings.HasPrefix(key, prefix) {
+			delete(h.state.pending, key)
+		}
+	}
+	for key := range h.state.sendSeq {
+		if strings.HasPrefix(key, prefix) {
+			delete(h.state.sendSeq, key)
+		}
+	}
+	for key := range h.state.dedup {
+		if strings.HasPrefix(key, prefix) {
+			delete(h.state.dedup, key)
 		}
 	}
 }
@@ -1347,6 +1668,20 @@ func (h *Hub) roundView() protocol.RoundView {
 	return protocol.RoundView{ID: h.state.round.ID, Status: string(h.state.round.Status)}
 }
 
+func (h *Hub) removeParticipant(participantID string) {
+	participant, ok := h.state.participants[participantID]
+	if !ok {
+		return
+	}
+	delete(h.state.participants, participantID)
+	delete(h.state.shortIDs, participant.ShortID)
+	for token, id := range h.state.resumeTokens {
+		if id == participantID {
+			delete(h.state.resumeTokens, token)
+		}
+	}
+	h.state.topologyVersion++
+}
 func (h *Hub) allocateShortID(participantID string) (string, bool) {
 	candidate := ShortIDFor(participantID)
 	if _, exists := h.state.shortIDs[candidate]; !exists {

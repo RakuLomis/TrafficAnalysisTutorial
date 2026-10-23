@@ -102,6 +102,7 @@ type Session struct {
 	CreatedAt    time.Time
 	ExpiresAt    time.Time
 	ClosedReason string
+	ClosedAt     time.Time
 
 	APublicKey []byte
 	BPublicKey []byte

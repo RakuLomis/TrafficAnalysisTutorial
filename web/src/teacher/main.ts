@@ -11,6 +11,7 @@ import type {
   ObserverSnapshot,
   ObserverStats,
   ParticipantView,
+  RoundChanged,
   RoundView,
   ServerMessage,
   SessionView,
@@ -48,6 +49,11 @@ const observerTruncated = byId<HTMLParagraphElement>('observer-truncated')
 const timeline = byId<HTMLDivElement>('timeline')
 const observerMessages = byId<HTMLDivElement>('observer-messages')
 const toast = byId<HTMLDivElement>('toast')
+const roundNewButton = byId<HTMLButtonElement>('round-new-button')
+const roundEndButton = byId<HTMLButtonElement>('round-end-button')
+const roundStartButton = byId<HTMLButtonElement>('round-start-button')
+const shutdownButton = byId<HTMLButtonElement>('shutdown-button')
+const controlStatus = byId<HTMLParagraphElement>('control-status')
 
 const params = new URLSearchParams(location.hash.replace(/^#/, ''))
 const adminToken = params.get('token') ?? ''
@@ -256,8 +262,15 @@ function handleServerMessage(message: ServerMessage): void {
     case 'observer.event':
       handleObserverEvent(message)
       break
+    case 'round.changed':
+      handleRoundChanged(message)
+      break
+    case 'round.ended':
+      showToast(`课堂状态：${message.reason}`)
+      break
     case 'error':
       showToast(`${message.code}: ${message.message}`)
+      renderControls()
       if (message.code === 'UNAUTHORIZED' || message.code === 'FORBIDDEN') {
         teacherWSStatus.textContent = '鉴权失败'
         teacherWSStatus.classList.add('error')
@@ -281,6 +294,7 @@ function handleAdminWelcome(message: AdminWelcome): void {
   setConnectionStatus('已连接')
   renderRound()
   renderTopology()
+  renderControls()
 }
 
 function handleTopology(message: TopologyChanged): void {
@@ -320,6 +334,86 @@ function handleObserverEvent(message: ObserverEvent): void {
   renderObservation()
 }
 
+function handleRoundChanged(message: RoundChanged): void {
+  round = message.round
+  renderRound()
+  selectedSessionID = null
+  snapshot = null
+  paused = false
+  pauseButton.textContent = '暂停观察'
+  pauseButton.disabled = true
+  observerStatus.textContent = '选择一条会话边开始观察。'
+  observerStats.replaceChildren()
+  timeline.replaceChildren()
+  observerMessages.replaceChildren()
+  observerTruncated.hidden = true
+  renderTopology()
+  renderObservation()
+  renderControls()
+  if (message.action === 'shutdown') {
+    controlStatus.textContent = '程序正在退出…'
+    setConnectionStatus('正在退出')
+  } else if (message.action === 'end') {
+    controlStatus.textContent = '课堂已结束。'
+  } else if (message.action === 'start') {
+    controlStatus.textContent = '新一轮已开始。'
+  } else {
+    controlStatus.textContent = '已开始新一轮。'
+  }
+}
+
+function renderControls(): void {
+  const running = round?.status === 'RUNNING'
+  const ended = round?.status === 'ENDED'
+  roundNewButton.hidden = !running
+  roundEndButton.hidden = !running
+  roundStartButton.hidden = !ended
+  const ready = Boolean(connectionEpoch)
+  roundNewButton.disabled = !ready || !running
+  roundEndButton.disabled = !ready || !running
+  roundStartButton.disabled = !ready || !ended
+  shutdownButton.disabled = !ready
+  controlStatus.textContent = running ? '课堂运行中。' : ended ? '课堂已结束，可开始新一轮。' : ''
+}
+
+function sendRoundControl(action: 'reset' | 'end' | 'start' | 'shutdown'): void {
+  if (!connection || !round) {
+    return
+  }
+  if (action === 'shutdown') {
+    if (!window.confirm('确认退出程序？这会断开所有学生并结束服务。')) {
+      return
+    }
+  }
+  const requestID = randomHex()
+  let type = ''
+  if (action === 'reset') {
+    type = 'round.reset'
+  } else if (action === 'end') {
+    type = 'class.end'
+  } else if (action === 'start') {
+    type = 'class.start'
+  } else {
+    type = 'server.shutdown'
+  }
+  const message: Record<string, unknown> = {
+    v: 1,
+    type,
+    request_id: requestID,
+  }
+  if (action !== 'shutdown') {
+    message.expected_round_id = round.id
+  }
+  roundNewButton.disabled = true
+  roundEndButton.disabled = true
+  roundStartButton.disabled = true
+  shutdownButton.disabled = true
+  controlStatus.textContent = '正在提交课堂操作…'
+  if (!connection.send(message)) {
+    controlStatus.textContent = '操作发送失败。'
+    renderControls()
+  }
+}
 function selectSession(sessionID: string): void {
   if (!connection || !connectionEpoch) {
     return
@@ -539,7 +633,16 @@ sessionSelect.addEventListener('change', () => {
   }
 })
 
+roundNewButton.addEventListener('click', () => sendRoundControl('reset'))
+roundEndButton.addEventListener('click', () => sendRoundControl('end'))
+roundStartButton.addEventListener('click', () => sendRoundControl('start'))
+shutdownButton.addEventListener('click', () => sendRoundControl('shutdown'))
+
 void loadInfo().then(() => {
   connectAdmin()
 })
+
+
+
+
 

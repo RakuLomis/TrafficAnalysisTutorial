@@ -235,3 +235,18 @@ type ObserverEvent struct {
 	Stats     ObserverStats  `json:"stats"`
 	Truncated bool           `json:"truncated"`
 }
+
+type RoundChanged struct {
+	V         int       `json:"v"`
+	Type      string    `json:"type"`
+	RequestID string    `json:"request_id"`
+	Round     RoundView `json:"round"`
+	Action    string    `json:"action"`
+}
+
+type RoundEnded struct {
+	V          int    `json:"v"`
+	Type       string `json:"type"`
+	Reason     string `json:"reason"`
+	NewRoundID string `json:"new_round_id,omitempty"`
+}

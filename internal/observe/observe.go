@@ -123,6 +123,15 @@ func (s *Store) Snapshot(sessionID string) (protocol.ObserverSnapshot, bool) {
 	}, true
 }
 
+func (s *Store) Forget(sessionID string) {
+	state := s.sessions[sessionID]
+	if state == nil {
+		return
+	}
+	s.globalBytes -= state.bytes
+	delete(s.sessions, sessionID)
+}
+
 func (s *Store) Reset() {
 	s.sessions = make(map[string]*sessionState)
 	s.globalBytes = 0

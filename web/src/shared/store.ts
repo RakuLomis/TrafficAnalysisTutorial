@@ -140,6 +140,14 @@ export class ClassroomStore {
     return this.#state.messages.get(sessionID) ?? []
   }
 
+  disconnect(): void {
+    this.#state.connected = false
+    this.#state.sessions = new Map()
+    this.#state.messages = new Map()
+    this.#state.activeSessionID = null
+    this.#emit()
+  }
+
   reset(): void {
     this.#state = emptyState()
     this.#emit()
@@ -195,3 +203,4 @@ function emptyState(): ClassroomState {
     connected: false,
   }
 }
+

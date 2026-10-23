@@ -736,3 +736,18 @@ button.secondary:hover:not(:disabled) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+.control-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+button.danger {
+  background: #b91c1c;
+}
+
+button.danger:hover:not(:disabled) {
+  background: #991b1b;
+}

@@ -75,6 +75,9 @@ let joinRequestID: string | null = null
 let composing = false
 let toastTimer = 0
 let suppressCloseNotice = false
+let pendingResume = false
+let resumeDeadline = 0
+let resumeTimer = 0
 
 store.subscribe(render)
 
@@ -206,12 +209,42 @@ function startJoin(): void {
     return
   }
   joinRequestID = randomHex()
+  pendingResume = false
+  resumeDeadline = 0
+  window.clearTimeout(resumeTimer)
   joinButton.disabled = true
   setJoinStatus('正在连接服务器…')
+  connectSocket(false)
+}
+
+function connectSocket(resume: boolean): void {
+  if (!config) {
+    return
+  }
+  pendingResume = resume
   const heartbeat = config.limits.heartbeat_ms > 0 ? config.limits.heartbeat_ms : 15000
   connection = new ClassroomConnection({
     onOpen: () => {
-      if (!connection || !config || !joinRequestID) {
+      if (!connection) {
+        return
+      }
+      if (pendingResume) {
+        const identity = currentIdentity()
+        if (!identity || !basis) {
+          cleanupToJoin('恢复所需的身份信息已丢失。')
+          return
+        }
+        connection.send({
+          v: 1,
+          type: 'resume',
+          request_id: randomHex(),
+          round_id: basis.roundID,
+          resume_token: identity.resumeToken,
+        })
+        connectionStatus.textContent = '恢复中…'
+        return
+      }
+      if (!config || !joinRequestID) {
         return
       }
       const sent = connection.send({
@@ -219,7 +252,7 @@ function startJoin(): void {
         type: 'join',
         request_id: joinRequestID,
         round_id: config.round.id,
-        nickname,
+        nickname: nicknameInput.value.trim(),
       })
       if (!sent) {
         setJoinStatus('加入请求发送失败。', true)
@@ -234,6 +267,39 @@ function startJoin(): void {
   connection.connect()
 }
 
+function startResume(): void {
+  if (!currentIdentity() || !basis || !config) {
+    cleanupToJoin('连接已断开，请重新加入。')
+    return
+  }
+  if (resumeDeadline > 0 && Date.now() >= resumeDeadline) {
+    cleanupToJoin('恢复窗口已过期，请刷新页面重新加入。')
+    return
+  }
+  connectSocket(true)
+}
+
+function cleanupToJoin(message: string): void {
+  pendingResume = false
+  resumeDeadline = 0
+  window.clearTimeout(resumeTimer)
+  suppressCloseNotice = true
+  connection?.close()
+  connection = null
+  crypto.destroyAll()
+  store.reset()
+  graph.reset()
+  basis = null
+  joinRequestID = null
+  selectedPeerID = null
+  appView.hidden = true
+  joinView.hidden = false
+  selfBadge.hidden = true
+  connectionStatus.textContent = '未连接'
+  connectionStatus.classList.add('error')
+  setJoinStatus(message, true)
+  joinButton.disabled = !config || config.round.status !== 'RUNNING'
+}
 function handleServerMessage(message: ServerMessage): void {
   switch (message.type) {
     case 'welcome':
@@ -278,6 +344,9 @@ function handleServerMessage(message: ServerMessage): void {
 
 function handleWelcome(welcome: Welcome): void {
   joinRequestID = null
+  pendingResume = false
+  resumeDeadline = 0
+  window.clearTimeout(resumeTimer)
   if (config) {
     config.round = welcome.round
   }
@@ -403,11 +472,16 @@ function handleActivity(message: ActivityBatch): void {
 
 function handleError(message: ErrorMessage): void {
   if (!currentIdentity()) {
+    suppressCloseNotice = true
     setJoinStatus(`${message.code}: ${message.message}`, true)
     joinButton.disabled = false
     joinRequestID = null
     connection?.close()
     connection = null
+    return
+  }
+  if (message.code === 'RESUME_EXPIRED') {
+    cleanupToJoin('同页恢复已过期，请使用昵称重新加入。')
     return
   }
   showToast(`${message.code}: ${message.message}`)
@@ -422,6 +496,9 @@ function handleError(message: ErrorMessage): void {
 
 function handleRoundEnded(message: RoundEnded): void {
   suppressCloseNotice = true
+  pendingResume = false
+  resumeDeadline = 0
+  window.clearTimeout(resumeTimer)
   crypto.destroyAll()
   store.reset()
   graph.reset()
@@ -453,19 +530,27 @@ function handleConnectionClosed(): void {
     suppressCloseNotice = false
     return
   }
-  crypto.destroyAll()
-  store.reset()
-  graph.reset()
-  basis = null
-  joinRequestID = null
-  selectedPeerID = null
-  appView.hidden = true
-  joinView.hidden = false
-  selfBadge.hidden = true
-  connectionStatus.textContent = '未连接'
+  if (!currentIdentity() || !basis) {
+    cleanupToJoin('连接已断开，请重新加入。')
+    return
+  }
+  if (resumeDeadline === 0) {
+    resumeDeadline = Date.now() + 60_000
+    crypto.destroyAll()
+    store.disconnect()
+    graph.reset()
+  }
+  if (Date.now() >= resumeDeadline) {
+    cleanupToJoin('恢复窗口已过期，请刷新页面重新加入。')
+    return
+  }
+  connectionStatus.textContent = '连接中断，正在恢复…'
   connectionStatus.classList.add('error')
-  setJoinStatus('连接已断开。请刷新页面重新加入；旧会话与密钥已清除。', true)
-  joinButton.disabled = !config || config.round.status !== 'RUNNING'
+  pendingResume = true
+  window.clearTimeout(resumeTimer)
+  resumeTimer = window.setTimeout(() => {
+    startResume()
+  }, 500)
 }
 
 function selectPeer(participantID: string): void {
@@ -843,4 +928,6 @@ chatForm.addEventListener('submit', (event) => {
 })
 
 void loadConfig()
+
+
 

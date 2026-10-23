@@ -211,6 +211,14 @@ export interface Pong {
   server_time_utc: string
 }
 
+export interface RoundChanged {
+  v: 1
+  type: 'round.changed'
+  request_id: string
+  round: RoundView
+  action: 'reset' | 'end' | 'start' | 'shutdown'
+}
+
 export interface RoundEnded {
   v: 1
   type: 'round.ended'
@@ -233,6 +241,7 @@ export type ServerMessage =
   | KeyConfirmMessage
   | ErrorMessage
   | Pong
+  | RoundChanged
   | RoundEnded
 
 export function parseServerMessage(data: string): ServerMessage | null {
@@ -250,4 +259,5 @@ export function parseServerMessage(data: string): ServerMessage | null {
     return null
   }
 }
+
 
