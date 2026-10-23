@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/traffic-classroom/config.schema.json",
+  "title": "Traffic Classroom V1 Configuration",
+  "description": "Built-in defaults and allowed ranges. Durations are integer milliseconds. Runtime configuration is defaults overridden by explicit CLI flags only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "student_addr",
+    "teacher_addr",
+    "planned_students",
+    "max_participants",
+    "max_raw_connections",
+    "max_identities",
+    "max_teachers",
+    "max_sessions_per_participant",
+    "max_nickname_runes",
+    "invite_timeout_ms",
+    "key_timeout_ms",
+    "heartbeat_ms",
+    "dead_timeout_ms",
+    "resume_window_ms",
+    "ack_timeout_ms",
+    "max_body_bytes",
+    "max_ciphertext_bytes",
+    "max_ws_message_bytes",
+    "session_history_count",
+    "session_history_bytes",
+    "global_history_bytes",
+    "closed_session_max",
+    "closed_session_ttl_ms",
+    "send_queue_count",
+    "send_queue_bytes",
+    "chat_rate_per_sec",
+    "chat_burst",
+    "client_history_per_session",
+    "client_cache_bytes",
+    "render_interval_ms"
+  ],
+  "properties": {
+    "student_addr": {
+      "type": "string",
+      "default": "0.0.0.0:8080",
+      "pattern": "^[^\\s:]+:[0-9]{1,5}$"
+    },
+    "teacher_addr": {
+      "type": "string",
+      "default": "127.0.0.1:8081",
+      "pattern": "^127(?:\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}:[0-9]{1,5}$"
+    },
+    "iface_ip": {
+      "type": "string",
+      "default": "",
+      "pattern": "^(|(?:(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9]))$"
+    },
+    "planned_students": {
+      "type": "integer",
+      "default": 50,
+      "minimum": 1,
+      "maximum": 100,
+      "description": "Display-only planning value; enforcement uses max_participants."
+    },
+    "max_participants": {
+      "type": "integer",
+      "default": 100,
+      "minimum": 1,
+      "maximum": 200
+    },
+    "max_raw_connections": {
+      "type": "integer",
+      "default": 120,
+      "minimum": 1,
+      "maximum": 256
+    },
+    "max_identities": {
+      "type": "integer",
+      "default": 200,
+      "minimum": 1,
+      "maximum": 512
+    },
+    "max_teachers": {
+      "type": "integer",
+      "default": 4,
+      "minimum": 1,
+      "maximum": 16
+    },
+    "max_sessions_per_participant": {
+      "type": "integer",
+      "default": 3,
+      "minimum": 1,
+      "maximum": 10
+    },
+    "max_nickname_runes": {
+      "type": "integer",
+      "default": 16,
+      "minimum": 1,
+      "maximum": 64
+    },
+    "invite_timeout_ms": {
+      "type": "integer",
+      "default": 30000,
+      "minimum": 5000,
+      "maximum": 300000
+    },
+    "key_timeout_ms": {
+      "type": "integer",
+      "default": 15000,
+      "minimum": 5000,
+      "maximum": 120000
+    },
+    "heartbeat_ms": {
+      "type": "integer",
+      "default": 15000,
+      "minimum": 5000,
+      "maximum": 60000
+    },
+    "dead_timeout_ms": {
+      "type": "integer",
+      "default": 45000,
+      "minimum": 6000,
+      "maximum": 300000
+    },
+    "resume_window_ms": {
+      "type": "integer",
+      "default": 60000,
+      "minimum": 10000,
+      "maximum": 300000
+    },
+    "ack_timeout_ms": {
+      "type": "integer",
+      "default": 5000,
+      "minimum": 1000,
+      "maximum": 30000
+    },
+    "max_body_bytes": {
+      "type": "integer",
+      "default": 4096,
+      "minimum": 1,
+      "maximum": 65536
+    },
+    "max_ciphertext_bytes": {
+      "type": "integer",
+      "default": 32768,
+      "minimum": 4096,
+      "maximum": 262144
+    },
+    "max_ws_message_bytes": {
+      "type": "integer",
+      "default": 65536,
+      "minimum": 4096,
+      "maximum": 1048576
+    },
+    "session_history_count": {
+      "type": "integer",
+      "default": 200,
+      "minimum": 1,
+      "maximum": 2000
+    },
+    "session_history_bytes": {
+      "type": "integer",
+      "default": 1048576,
+      "minimum": 1024,
+      "maximum": 8388608
+    },
+    "global_history_bytes": {
+      "type": "integer",
+      "default": 33554432,
+      "minimum": 1048576,
+      "maximum": 268435456
+    },
+    "closed_session_max": {
+      "type": "integer",
+      "default": 200,
+      "minimum": 1,
+      "maximum": 2000
+    },
+    "closed_session_ttl_ms": {
+      "type": "integer",
+      "default": 600000,
+      "minimum": 60000,
+      "maximum": 3600000
+    },
+    "send_queue_count": {
+      "type": "integer",
+      "default": 64,
+      "minimum": 1,
+      "maximum": 1024
+    },
+    "send_queue_bytes": {
+      "type": "integer",
+      "default": 262144,
+      "minimum": 4096,
+      "maximum": 4194304
+    },
+    "chat_rate_per_sec": {
+      "type": "integer",
+      "default": 2,
+      "minimum": 1,
+      "maximum": 20
+    },
+    "chat_burst": {
+      "type": "integer",
+      "default": 5,
+      "minimum": 1,
+      "maximum": 100
+    },
+    "client_history_per_session": {
+      "type": "integer",
+      "default": 200,
+      "minimum": 1,
+      "maximum": 2000
+    },
+    "client_cache_bytes": {
+      "type": "integer",
+      "default": 3145728,
+      "minimum": 65536,
+      "maximum": 16777216
+    },
+    "render_interval_ms": {
+      "type": "integer",
+      "default": 100,
+      "minimum": 16,
+      "maximum": 1000
+    }
+  }
+}
