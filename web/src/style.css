@@ -284,6 +284,10 @@ button:disabled {
   white-space: nowrap;
 }
 
+.graph-card {
+  position: relative;
+}
+
 .graph-card svg {
   display: block;
   width: 100%;
@@ -292,12 +296,95 @@ button:disabled {
   border-radius: 12px;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
-  touch-action: manipulation;
+  touch-action: none;
+  cursor: grab;
+}
+
+.graph-card svg.panning {
+  cursor: grabbing;
+}
+
+.graph-toolbar {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12);
+}
+
+.graph-tool-button,
+.graph-zoom-label {
+  min-width: 34px;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: #eef2f7;
+  color: #334155;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.graph-tool-button:hover,
+.graph-zoom-label:hover {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.graph-zoom-label {
+  min-width: 52px;
+}
+
+.graph-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  margin: 0;
+  border-radius: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+}
+
+.graph-fullscreen svg {
+  flex: 1;
+  min-height: 0;
+  height: calc(100vh - 130px);
+  margin: 0;
+  border-radius: 0;
+  border: 0;
+}
+
+body.graph-fullscreen-open {
+  overflow: hidden;
 }
 
 .graph-edge {
   stroke: #94a3b8;
-  stroke-width: 2;
+  stroke-width: 2.5;
+}
+
+.graph-edge.hover {
+  stroke: #f59e0b;
+  stroke-width: 4;
+  filter: drop-shadow(0 0 4px rgba(245, 158, 11, 0.45));
+}
+
+.edge-hit {
+  stroke: transparent;
+  stroke-width: 20;
+  fill: none;
+  pointer-events: stroke;
+  cursor: pointer;
 }
 
 .graph-edge.edge-encrypted {
@@ -328,9 +415,14 @@ button:disabled {
 
 .edge-label {
   fill: #475569;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 600;
   text-anchor: middle;
   pointer-events: none;
+  paint-order: stroke;
+  stroke: #f8fafc;
+  stroke-width: 4px;
+  stroke-linejoin: round;
 }
 
 .edge-label.own {
@@ -361,17 +453,44 @@ button:disabled {
 
 .node-name {
   fill: #18212f;
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 700;
   text-anchor: middle;
   pointer-events: none;
+  paint-order: stroke;
+  stroke: #f8fafc;
+  stroke-width: 4px;
+  stroke-linejoin: round;
 }
 
 .node-code {
   fill: #64748b;
-  font-size: 11px;
+  font-size: 12px;
   text-anchor: middle;
   pointer-events: none;
+  paint-order: stroke;
+  stroke: #f8fafc;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.graph-node.hover .node-circle {
+  stroke: #f59e0b;
+  stroke-width: 5;
+}
+
+.graph-node.hover .node-name,
+.graph-node.hover .node-code {
+  display: block;
+}
+
+.labels-minimal .graph-node:not(.self):not(.focus):not(.hover) .node-name,
+.labels-minimal .graph-node:not(.self):not(.focus):not(.hover) .node-code {
+  display: none;
+}
+
+.labels-minimal .edge-label:not(.own):not(.active) {
+  display: none;
 }
 
 .graph-pulse {
@@ -751,3 +870,4 @@ button.danger {
 button.danger:hover:not(:disabled) {
   background: #991b1b;
 }
+

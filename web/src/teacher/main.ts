@@ -432,6 +432,7 @@ function selectSession(sessionID: string): void {
     session_id: sessionID,
   })
   renderTopology()
+  graph.focusSession(sessionID)
   renderObservation()
 }
 
@@ -641,6 +642,7 @@ shutdownButton.addEventListener('click', () => sendRoundControl('shutdown'))
 void loadInfo().then(() => {
   connectAdmin()
 })
+
 
 
 

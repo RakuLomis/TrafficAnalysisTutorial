@@ -570,6 +570,7 @@ function selectSession(sessionID: string): void {
     return
   }
   store.setActiveSession(sessionID)
+  graph.focusSession(sessionID)
   render()
 }
 
@@ -928,6 +929,7 @@ chatForm.addEventListener('submit', (event) => {
 })
 
 void loadConfig()
+
 
 
 
