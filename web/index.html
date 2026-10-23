@@ -6,6 +6,7 @@
     <meta name="color-scheme" content="light dark" />
     <title>加密流量课堂 · 学生端</title>
     <link rel="stylesheet" href="/src/style.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='%232563eb'/%3E%3C/svg%3E" />
   </head>
   <body>
     <div class="page">
@@ -14,30 +15,83 @@
           <p class="eyebrow">局域网教学演示</p>
           <h1>加密流量课堂</h1>
         </div>
-        <span class="badge">学生端</span>
+        <div class="topbar-right">
+          <span id="connection-status" class="badge">未连接</span>
+          <span id="self-badge" class="badge badge-teacher" hidden>学生端</span>
+        </div>
       </header>
 
-      <main class="stack">
-        <section class="card">
+      <main>
+        <section id="join-view" class="card join-card">
           <h2>加入课堂</h2>
           <p id="config-status" class="muted">正在读取课堂配置…</p>
-          <label class="field">
-            <span>临时昵称</span>
-            <input id="nickname" maxlength="16" autocomplete="off" placeholder="1—16 个字符" />
-          </label>
-          <button id="join-button" type="button" disabled>加入（后续任务开放）</button>
+          <form id="join-form" class="join-form">
+            <label class="field">
+              <span>临时昵称</span>
+              <input id="nickname" maxlength="16" autocomplete="off" placeholder="1—16 个字符，可重名" />
+            </label>
+            <button id="join-button" type="submit" disabled>加入</button>
+          </form>
+          <p id="join-status" class="muted" aria-live="polite"></p>
           <p id="crypto-status" class="muted"></p>
         </section>
 
-        <section class="card">
-          <h2>连接自检</h2>
-          <p class="muted">验证本机浏览器到服务端的 WebSocket 往返；不发送昵称或聊天内容。</p>
-          <button id="echo-button" type="button">测试 WebSocket 往返</button>
-          <p id="ws-status" class="muted">尚未测试</p>
-          <pre id="echo-log" class="log" aria-live="polite"></pre>
+        <section id="app-view" hidden>
+          <div class="student-layout">
+            <section class="card graph-card">
+              <div class="card-head">
+                <div>
+                  <h2>全班拓扑</h2>
+                  <p class="muted">圆点是参与者，连线是逻辑会话；不是网络抓包。</p>
+                </div>
+                <span id="self-name" class="self-name"></span>
+              </div>
+              <svg id="topology" viewBox="0 0 1000 1000" role="img" aria-label="在线参与者与逻辑会话拓扑"></svg>
+              <p id="topology-empty" class="muted" hidden>暂无在线参与者</p>
+            </section>
+
+            <aside class="student-side">
+              <section class="card">
+                <h2>邀请</h2>
+                <p id="invite-target" class="muted">点击在线同学选择邀请对象。</p>
+                <div id="peer-list" class="peer-list"></div>
+                <label class="field compact">
+                  <span>会话模式</span>
+                  <select id="invite-mode">
+                    <option value="plaintext">明文</option>
+                    <option value="encrypted">加密</option>
+                  </select>
+                </label>
+                <button id="invite-button" type="button" disabled>发送邀请</button>
+                <div id="invites" class="invites"></div>
+              </section>
+
+              <section class="card chat-card">
+                <div id="session-tabs" class="session-tabs"></div>
+                <div class="card-head">
+                  <h2 id="chat-title">选择会话</h2>
+                  <div class="chat-head-actions">
+                    <span id="chat-state" class="muted"></span>
+                    <button id="close-session-button" type="button" class="secondary" hidden>关闭会话</button>
+                  </div>
+                </div>
+                <div id="messages" class="messages" aria-live="polite"></div>
+                <form id="chat-form" class="chat-form">
+                  <textarea id="chat-input" rows="2" maxlength="4096" placeholder="输入消息…" disabled></textarea>
+                  <div class="chat-actions">
+                    <span id="byte-count" class="muted">0 / 4096</span>
+                    <button id="send-button" type="submit" disabled>发送</button>
+                  </div>
+                </form>
+              </section>
+            </aside>
+          </div>
         </section>
       </main>
+      <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     </div>
     <script type="module" src="/src/student/main.ts"></script>
   </body>
 </html>
+
+

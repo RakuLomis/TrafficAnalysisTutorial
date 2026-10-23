@@ -228,3 +228,366 @@ button:disabled {
     scroll-behavior: auto;
   }
 }
+
+[hidden] {
+  display: none !important;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.join-card {
+  max-width: 560px;
+  margin: 8vh auto 0;
+}
+
+.join-form {
+  margin-top: 16px;
+}
+
+.student-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.9fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.student-side {
+  display: grid;
+  gap: 16px;
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.card-head h2 {
+  margin: 0;
+}
+
+.chat-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.self-name {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.graph-card svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 12px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  touch-action: manipulation;
+}
+
+.graph-edge {
+  stroke: #94a3b8;
+  stroke-width: 2;
+}
+
+.graph-edge.edge-encrypted {
+  stroke: #059669;
+}
+
+.graph-edge.state-invited {
+  stroke-dasharray: 7 6;
+  opacity: 0.65;
+}
+
+.graph-edge.state-negotiating {
+  stroke-dasharray: 3 5;
+}
+
+.graph-edge.own {
+  stroke-width: 3;
+}
+
+.graph-edge.active {
+  stroke-width: 4;
+  filter: drop-shadow(0 0 4px rgba(37, 99, 235, 0.35));
+}
+
+.graph-edge.clickable {
+  cursor: pointer;
+}
+
+.edge-label {
+  fill: #475569;
+  font-size: 12px;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.edge-label.own {
+  fill: #1d4ed8;
+  font-weight: 700;
+}
+
+.graph-node {
+  cursor: pointer;
+  outline: none;
+}
+
+.graph-node .node-circle {
+  stroke: #ffffff;
+  stroke-width: 3;
+  filter: drop-shadow(0 2px 4px rgba(15, 23, 42, 0.2));
+}
+
+.graph-node.self .node-circle {
+  stroke: #0f172a;
+  stroke-width: 5;
+}
+
+.graph-node:focus-visible .node-circle {
+  outline: 3px solid #1d4ed8;
+  outline-offset: 3px;
+}
+
+.node-name {
+  fill: #18212f;
+  font-size: 13px;
+  font-weight: 700;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.node-code {
+  fill: #64748b;
+  font-size: 11px;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.graph-pulse {
+  fill: #f59e0b;
+  pointer-events: none;
+}
+
+.graph-pulse.pulse-encrypted {
+  fill: #10b981;
+}
+
+.peer-list {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.peer-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #18212f;
+  font-weight: 500;
+  text-align: left;
+}
+
+.peer-item:hover {
+  background: #eef4ff;
+}
+
+.peer-item.selected {
+  border-color: #2563eb;
+  background: #dbeafe;
+}
+
+.peer-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.peer-label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.peer-badge {
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.field.compact {
+  margin: 8px 0;
+}
+
+.invites {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.invite-card {
+  border: 1px solid #fcd34d;
+  background: #fffbeb;
+  border-radius: 12px;
+  padding: 10px;
+}
+
+.invite-card p {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+}
+
+.inline-actions {
+  display: flex;
+  gap: 8px;
+}
+
+button.secondary {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+button.secondary:hover:not(:disabled) {
+  background: #cbd5e1;
+}
+
+.session-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+}
+
+.session-tab {
+  background: #eef2f7;
+  color: #334155;
+  border: 1px solid #dbe3ee;
+  white-space: nowrap;
+  font-size: 0.82rem;
+  padding: 7px 10px;
+}
+
+.session-tab.active {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #2563eb;
+}
+
+.messages {
+  display: grid;
+  gap: 8px;
+  min-height: 180px;
+  max-height: 340px;
+  overflow: auto;
+  padding: 4px;
+  margin: 10px 0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.message {
+  max-width: 85%;
+  border-radius: 12px;
+  padding: 8px 10px;
+  border: 1px solid #dbe3ee;
+  background: #ffffff;
+}
+
+.message.out {
+  justify-self: end;
+  background: #dbeafe;
+  border-color: #bfdbfe;
+}
+
+.message.in {
+  justify-self: start;
+}
+
+.message-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message-meta {
+  margin-top: 4px;
+  font-size: 0.7rem;
+  color: #64748b;
+  text-align: right;
+}
+
+.chat-form textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 46px;
+  max-height: 140px;
+}
+
+.chat-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  max-width: min(520px, calc(100vw - 32px));
+  background: #0f172a;
+  color: #f8fafc;
+  border-radius: 12px;
+  padding: 10px 14px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.3);
+  z-index: 20;
+}
+
+@media (max-width: 900px) {
+  .student-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .topbar {
+    align-items: flex-start;
+  }
+
+  .topbar-right {
+    flex-direction: column;
+    align-items: flex-end;
+  }
+
+  .messages {
+    max-height: 45vh;
+  }
+
+  .graph-card svg {
+    min-height: 280px;
+  }
+}
+

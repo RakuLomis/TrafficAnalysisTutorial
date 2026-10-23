@@ -983,6 +983,7 @@ func (h *Hub) handleChatReceipt(conn *Connection, msg *protocol.ChatReceipt) {
 		pending.ReceiptStatus = "failed"
 		h.sendStatus(pending, "failed", h.now())
 	}
+	h.closeSession(session, "crypto_failed")
 }
 
 func (h *Hub) closeSession(session *Session, reason string) {

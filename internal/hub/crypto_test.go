@@ -318,3 +318,40 @@ func TestEncryptedChatRejectsPlaintextField(t *testing.T) {
 		t.Fatalf("error = %+v", err)
 	}
 }
+
+func TestCryptoFailedReceiptClosesSession(t *testing.T) {
+	h, _ := startTestHub(t, func() time.Time { return fixedTime() })
+	fixture := setupPair(t, h)
+	sessionID := activateEncryptedSession(t, h, fixture)
+
+	messageID := newEpoch(t)
+	chat := &protocol.ChatSend{
+		SessionCommand: protocol.SessionCommand{
+			Joined:    protocol.Joined{V: 1, Type: "chat.send", RequestID: newEpoch(t), RoundID: h.RoundID(), ConnectionEpoch: fixture.aEpoch},
+			SessionID: sessionID,
+		},
+		MessageID:     messageID,
+		Seq:           "1",
+		NonceB64:      b64Bytes(encryptedNonce(0, 1, 0x55)),
+		CiphertextB64: b64Bytes(make([]byte, 32)),
+	}
+	_ = h.Submit(context.Background(), MessageCommand{Epoch: fixture.aEpoch, Message: chat})
+	processPending(t, h)
+
+	receipt := &protocol.ChatReceipt{
+		SessionCommand: protocol.SessionCommand{
+			Joined:    protocol.Joined{V: 1, Type: "chat.receipt", RequestID: newEpoch(t), RoundID: h.RoundID(), ConnectionEpoch: fixture.bEpoch},
+			SessionID: sessionID,
+		},
+		MessageID: messageID,
+		Status:    "crypto_failed",
+	}
+	_ = h.Submit(context.Background(), MessageCommand{Epoch: fixture.bEpoch, Message: receipt})
+	processPending(t, h)
+	if state := sessionState(t, h, sessionID); state != SessionClosed {
+		t.Fatalf("state = %s", state)
+	}
+	if status := lastChatStatus(fixture.aPeer); status == nil || status.Status != "failed" {
+		t.Fatalf("status = %+v", status)
+	}
+}
