@@ -115,7 +115,19 @@ func run(cfg config.Config) error {
 	fmt.Printf("教师监听：%s\n", server.TeacherAddr().String())
 	fmt.Printf("使用网卡：%s\n", selected.String())
 	fmt.Printf("轮次 ID：%s\n", classroom.RoundID())
-	fmt.Println("\n学生用手机连接同一局域网后访问学生入口。按 Ctrl+C 退出。")
+	if len(candidates) > 1 {
+		fmt.Println("候选网卡：")
+		for _, candidate := range candidates {
+			marker := " "
+			if candidate.IP.Equal(selected.IP) {
+				marker = "*"
+			}
+			fmt.Printf("  %s %s\n", marker, candidate.String())
+		}
+	}
+	fmt.Println("\n学生用手机连接同一局域网后访问学生入口。")
+	fmt.Println("自检只代表服务已启动；手机是否可达仍要用实际设备验证。")
+	fmt.Println("按 Ctrl+C 退出；控制台命令见下。")
 
 	logger.Info("traffic classroom started",
 		"version", version,
@@ -130,8 +142,11 @@ func run(cfg config.Config) error {
 		if err := platform.OpenBrowser(teacherAuthURL); err != nil {
 			logger.Warn("cannot open teacher page", "error", err)
 			fmt.Printf("未能自动打开教师页，请手动访问：%s\n", teacherURL)
+			fmt.Println("可输入 o 重试自动打开带 token 的教师页。")
 		}
 	}
+
+	startConsole(teacherAuthURL, stop)
 
 	select {
 	case <-ctx.Done():
@@ -142,6 +157,47 @@ func run(cfg config.Config) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return server.Close(shutdownCtx)
+}
+
+func startConsole(teacherURL string, stop context.CancelFunc) {
+	if !stdinInteractive() {
+		return
+	}
+	fmt.Println("\n控制台命令：o 重新打开教师页，q 退出，h 查看帮助。")
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			if !handleConsoleCommand(scanner.Text(), teacherURL, platform.OpenBrowser, stop) {
+				return
+			}
+		}
+	}()
+}
+
+func handleConsoleCommand(line, teacherURL string, open func(string) error, stop context.CancelFunc) bool {
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "o", "open":
+		if err := open(teacherURL); err != nil {
+			fmt.Fprintf(os.Stderr, "打开教师页失败：%v\n", err)
+		} else {
+			fmt.Println("已请求重新打开教师页。")
+		}
+		return true
+	case "q", "quit", "exit":
+		fmt.Println("正在退出…")
+		stop()
+		return false
+	case "h", "help", "?":
+		fmt.Println("o 重新打开教师页；q 退出。")
+		return true
+	default:
+		return true
+	}
+}
+
+func stdinInteractive() bool {
+	info, err := os.Stdin.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func teacherPageURL(baseURL, token string) string {
@@ -175,8 +231,7 @@ func portOf(addr string) int {
 }
 
 func waitForEnter() {
-	info, err := os.Stdin.Stat()
-	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+	if !stdinInteractive() {
 		return
 	}
 	fmt.Fprint(os.Stderr, "\n按 Enter 键退出…")

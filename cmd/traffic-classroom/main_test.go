@@ -48,3 +48,33 @@ func TestTeacherPageURL(t *testing.T) {
 		t.Fatal("missing token fragment")
 	}
 }
+
+func TestConsoleOpenCommand(t *testing.T) {
+	opened := ""
+	stopped := false
+	keep := handleConsoleCommand("o", "http://127.0.0.1:8081/#token=x", func(url string) error {
+		opened = url
+		return nil
+	}, func() { stopped = true })
+	if !keep || opened != "http://127.0.0.1:8081/#token=x" || stopped {
+		t.Fatalf("open command: keep=%v opened=%q stopped=%v", keep, opened, stopped)
+	}
+}
+
+func TestConsoleQuitCommand(t *testing.T) {
+	stopped := false
+	keep := handleConsoleCommand("q", "http://127.0.0.1:8081/#token=x", func(string) error { return nil }, func() {
+		stopped = true
+	})
+	if keep || !stopped {
+		t.Fatalf("quit command: keep=%v stopped=%v", keep, stopped)
+	}
+}
+
+func TestConsoleHelpAndUnknownKeepRunning(t *testing.T) {
+	for _, line := range []string{"h", "unknown"} {
+		if !handleConsoleCommand(line, "http://127.0.0.1:8081/", func(string) error { return nil }, func() {}) {
+			t.Fatalf("command %q stopped the console", line)
+		}
+	}
+}
