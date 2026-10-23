@@ -3,8 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
@@ -15,7 +13,9 @@ import (
 	"time"
 
 	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/config"
+	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/hub"
 	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/platform"
+	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/protocol"
 	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/transport"
 	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/web"
 )
@@ -69,21 +69,43 @@ func run(cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	roundID, err := randomID()
+	adminToken, err := protocol.NewToken()
 	if err != nil {
-		return fmt.Errorf("生成轮次 ID 失败：%w", err)
+		return fmt.Errorf("生成管理 token 失败：%w", err)
 	}
+	classroom, err := hub.NewWithOptions(cfg, logger, hub.Options{
+		AdminToken:    adminToken,
+		ServerVersion: version,
+	})
+	if err != nil {
+		return fmt.Errorf("初始化状态中心失败：%w", err)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	hubCtx, hubCancel := context.WithCancel(ctx)
+	hubDone := make(chan struct{})
+	go func() {
+		classroom.Run(hubCtx)
+		close(hubDone)
+	}()
+	defer func() {
+		hubCancel()
+		<-hubDone
+	}()
 
 	server := transport.New(cfg, web.StudentHandler(), web.TeacherHandler(), transport.Info{
 		Version:    version,
-		RoundID:    roundID,
+		RoundID:    classroom.RoundID(),
 		StudentURL: studentURL,
 		Candidates: candidates,
+		Hub:        classroom,
 	}, logger)
 	if err := server.Start(); err != nil {
 		return fmt.Errorf("无法启动服务：%w\n提示：端口可能被占用。可用 --student-addr 0.0.0.0:8090 --teacher-addr 127.0.0.1:8091 显式改端口，并同步放行防火墙。", err)
 	}
 	teacherURL := "http://" + server.TeacherAddr().String() + "/"
+	teacherAuthURL := teacherPageURL(teacherURL, adminToken)
 
 	fmt.Printf("\n加密流量课堂 %s\n", version)
 	fmt.Printf("学生入口：%s\n", studentURL)
@@ -91,12 +113,12 @@ func run(cfg config.Config) error {
 	fmt.Printf("学生监听：%s\n", server.StudentAddr().String())
 	fmt.Printf("教师监听：%s\n", server.TeacherAddr().String())
 	fmt.Printf("使用网卡：%s\n", selected.String())
-	fmt.Printf("轮次 ID：%s\n", roundID)
+	fmt.Printf("轮次 ID：%s\n", classroom.RoundID())
 	fmt.Println("\n学生用手机连接同一局域网后访问学生入口。按 Ctrl+C 退出。")
 
 	logger.Info("traffic classroom started",
 		"version", version,
-		"round_id", roundID,
+		"round_id", classroom.RoundID(),
 		"student_url", studentURL,
 		"student_listen", server.StudentAddr().String(),
 		"teacher_url", teacherURL,
@@ -104,20 +126,22 @@ func run(cfg config.Config) error {
 	)
 
 	if !cfg.NoOpen {
-		if err := platform.OpenBrowser(teacherURL); err != nil {
+		if err := platform.OpenBrowser(teacherAuthURL); err != nil {
 			logger.Warn("cannot open teacher page", "error", err)
 			fmt.Printf("未能自动打开教师页，请手动访问：%s\n", teacherURL)
 		}
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 	<-ctx.Done()
 
 	fmt.Println("\n正在关闭服务…")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return server.Close(shutdownCtx)
+}
+
+func teacherPageURL(baseURL, token string) string {
+	return strings.TrimRight(baseURL, "/") + "/#token=" + token
 }
 
 func studentURLFor(ip string, port int) (string, error) {
@@ -144,14 +168,6 @@ func portOf(addr string) int {
 		return 0
 	}
 	return port
-}
-
-func randomID() (string, error) {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(buf), nil
 }
 
 func waitForEnter() {

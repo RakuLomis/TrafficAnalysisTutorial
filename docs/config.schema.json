@@ -35,7 +35,11 @@
     "chat_burst",
     "client_history_per_session",
     "client_cache_bytes",
-    "render_interval_ms"
+    "render_interval_ms",
+    "write_timeout_ms",
+    "join_timeout_ms",
+    "control_rate_per_sec",
+    "control_burst"
   ],
   "properties": {
     "student_addr": {
@@ -132,6 +136,18 @@
       "minimum": 1000,
       "maximum": 30000
     },
+    "write_timeout_ms": {
+      "type": "integer",
+      "default": 5000,
+      "minimum": 1000,
+      "maximum": 30000
+    },
+    "join_timeout_ms": {
+      "type": "integer",
+      "default": 10000,
+      "minimum": 3000,
+      "maximum": 60000
+    },
     "max_body_bytes": {
       "type": "integer",
       "default": 4096,
@@ -203,6 +219,18 @@
       "default": 5,
       "minimum": 1,
       "maximum": 100
+    },
+    "control_rate_per_sec": {
+      "type": "integer",
+      "default": 10,
+      "minimum": 1,
+      "maximum": 100
+    },
+    "control_burst": {
+      "type": "integer",
+      "default": 20,
+      "minimum": 1,
+      "maximum": 200
     },
     "client_history_per_session": {
       "type": "integer",

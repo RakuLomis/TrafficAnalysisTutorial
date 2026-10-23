@@ -10,9 +10,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/config"
+	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/hub"
 	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/platform"
 	"github.com/coder/websocket"
 )
@@ -22,6 +25,7 @@ type Info struct {
 	RoundID    string
 	StudentURL string
 	Candidates []platform.Candidate
+	Hub        *hub.Hub
 }
 
 type Server struct {
@@ -35,6 +39,9 @@ type Server struct {
 	teacherServer *http.Server
 	studentLn     net.Listener
 	teacherLn     net.Listener
+
+	studentRaw atomic.Int64
+	teacherRaw atomic.Int64
 }
 
 func New(cfg config.Config, studentStatic, teacherStatic http.Handler, info Info, logger *slog.Logger) *Server {
@@ -128,7 +135,7 @@ func (s *Server) studentHandler() http.Handler {
 		_, _ = w.Write([]byte("ok"))
 	})
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
-		s.writeJSON(w, s.publicConfig())
+		s.writeJSON(w, s.publicConfig(r))
 	})
 	mux.HandleFunc("/ws", s.handleStudentWS)
 	mux.Handle("/", s.studentStatic)
@@ -138,10 +145,11 @@ func (s *Server) studentHandler() http.Handler {
 func (s *Server) teacherHandler() http.Handler {
 	mux := http.NewServeMux()
 	handler := func(w http.ResponseWriter, r *http.Request) {
-		s.writeJSON(w, s.teacherInfo())
+		s.writeJSON(w, s.teacherInfo(r))
 	}
 	mux.HandleFunc("/api/config", handler)
 	mux.HandleFunc("/api/teacher-info", handler)
+	mux.HandleFunc("/ws/admin", s.handleAdminWS)
 	mux.Handle("/", s.teacherStatic)
 	return requireLoopbackHost(mux)
 }
@@ -151,36 +159,81 @@ func (s *Server) handleStudentWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+	if s.info.Hub == nil {
+		http.Error(w, "hub is not available", http.StatusServiceUnavailable)
+		return
+	}
+	if s.studentRaw.Add(1) > int64(s.cfg.MaxRawConnections) {
+		s.studentRaw.Add(-1)
+		http.Error(w, "student connection capacity reached", http.StatusServiceUnavailable)
+		return
+	}
+	s.serveWebSocket(w, r, false, &s.studentRaw)
+}
+
+func (s *Server) handleAdminWS(w http.ResponseWriter, r *http.Request) {
+	if err := CheckOrigin(r); err != nil {
+		http.Error(w, "origin not allowed", http.StatusForbidden)
+		return
+	}
+	if s.info.Hub == nil {
+		http.Error(w, "hub is not available", http.StatusServiceUnavailable)
+		return
+	}
+	if s.teacherRaw.Add(1) > int64(s.cfg.MaxTeachers) {
+		s.teacherRaw.Add(-1)
+		http.Error(w, "teacher connection capacity reached", http.StatusServiceUnavailable)
+		return
+	}
+	s.serveWebSocket(w, r, true, &s.teacherRaw)
+}
+
+func (s *Server) serveWebSocket(w http.ResponseWriter, r *http.Request, admin bool, counter *atomic.Int64) {
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { counter.Add(-1) })
+	}
+	defer release()
+
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 		CompressionMode:    websocket.CompressionDisabled,
 	})
 	if err != nil {
 		return
 	}
-	defer conn.CloseNow()
-	conn.SetReadLimit(int64(s.cfg.MaxWSMessageBytes))
-
-	for {
-		typ, data, err := conn.Read(r.Context())
-		if err != nil {
-			return
-		}
-		if typ != websocket.MessageText {
-			_ = conn.Close(websocket.StatusUnsupportedData, "text messages only")
-			return
-		}
-		if len(data) > s.cfg.MaxWSMessageBytes {
-			_ = conn.Close(websocket.StatusMessageTooBig, "message too large")
-			return
-		}
-		writeCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		err = conn.Write(writeCtx, websocket.MessageText, data)
-		cancel()
-		if err != nil {
-			return
-		}
+	conn, err := newConnection(r.Context(), s.cfg, ws, s.info.Hub, admin, func(epoch string) {
+		release()
+		go s.notifyDisconnect(epoch)
+	})
+	if err != nil {
+		_ = ws.CloseNow()
+		return
 	}
+	registerCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	reply := make(chan error, 1)
+	if err := s.info.Hub.Submit(registerCtx, hub.ConnectCommand{Conn: conn.HubConnection(), Reply: reply}); err != nil {
+		conn.Close("hub_unavailable")
+		return
+	}
+	select {
+	case err := <-reply:
+		if err != nil {
+			conn.Close("hub_rejected")
+			return
+		}
+	case <-registerCtx.Done():
+		conn.Close("hub_timeout")
+		return
+	}
+	conn.Serve()
+}
+
+func (s *Server) notifyDisconnect(epoch string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = s.info.Hub.Submit(ctx, hub.DisconnectCommand{Epoch: epoch})
 }
 
 type publicRound struct {
@@ -233,12 +286,12 @@ type teacherInfo struct {
 	IfaceCandidates []ifaceCandidate `json:"iface_candidates"`
 }
 
-func (s *Server) publicConfig() publicConfig {
+func (s *Server) publicConfig(r *http.Request) publicConfig {
 	return publicConfig{
 		V:               1,
 		ProtocolVersion: 1,
 		ServerVersion:   s.info.Version,
-		Round:           publicRound{ID: s.info.RoundID, Status: "RUNNING"},
+		Round:           s.currentRound(r),
 		Limits: publicLimits{
 			MaxNicknameRunes:          s.cfg.MaxNicknameRunes,
 			MaxBodyBytes:              s.cfg.MaxBodyBytes,
@@ -256,9 +309,9 @@ func (s *Server) publicConfig() publicConfig {
 	}
 }
 
-func (s *Server) teacherInfo() teacherInfo {
+func (s *Server) teacherInfo(r *http.Request) teacherInfo {
 	info := teacherInfo{
-		publicConfig:    s.publicConfig(),
+		publicConfig:    s.publicConfig(r),
 		StudentURL:      s.info.StudentURL,
 		StudentPort:     studentPort(s.cfg.StudentAddr),
 		IfaceCandidates: make([]ifaceCandidate, 0, len(s.info.Candidates)),
@@ -274,6 +327,20 @@ func (s *Server) teacherInfo() teacherInfo {
 		})
 	}
 	return info
+}
+
+func (s *Server) currentRound(r *http.Request) publicRound {
+	round := publicRound{ID: s.info.RoundID, Status: "RUNNING"}
+	if s.info.Hub == nil {
+		return round
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+	defer cancel()
+	snapshot, err := s.info.Hub.Snapshot(ctx)
+	if err != nil {
+		return round
+	}
+	return publicRound{ID: snapshot.Round.ID, Status: string(snapshot.Round.Status)}
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, value any) {

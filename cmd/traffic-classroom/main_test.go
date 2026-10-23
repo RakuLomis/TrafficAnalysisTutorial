@@ -1,7 +1,7 @@
 package main
 
 import (
-	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -39,19 +39,12 @@ func TestPortOf(t *testing.T) {
 	}
 }
 
-func TestRandomIDIs32LowerHex(t *testing.T) {
-	id, err := randomID()
-	if err != nil {
-		t.Fatalf("randomID() error = %v", err)
+func TestTeacherPageURL(t *testing.T) {
+	got := teacherPageURL("http://127.0.0.1:8081/", "abc")
+	if got != "http://127.0.0.1:8081/#token=abc" {
+		t.Fatalf("teacherPageURL() = %q", got)
 	}
-	if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(id) {
-		t.Fatalf("randomID() = %q", id)
-	}
-	other, err := randomID()
-	if err != nil {
-		t.Fatalf("randomID() second error = %v", err)
-	}
-	if id == other {
-		t.Fatal("randomID() returned duplicate values")
+	if !strings.Contains(teacherPageURL("http://127.0.0.1:8081", "abc"), "#token=abc") {
+		t.Fatal("missing token fragment")
 	}
 }

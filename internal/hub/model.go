@@ -217,6 +217,7 @@ type Peer interface {
 type Connection struct {
 	Epoch         string
 	ParticipantID string
+	Admin         bool
 	State         ConnectionState
 	ConnectedAt   time.Time
 	LastSeen      time.Time

@@ -1,5 +1,6 @@
 import { fetchConfig, type PublicConfig } from '../shared/api'
 import { cryptoLibraryAvailable, secureRandomAvailable } from '../shared/crypto'
+import { isPongPayload } from '../shared/pong'
 
 function requireElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id)
@@ -56,7 +57,7 @@ function testEcho(): void {
   wsStatus.classList.remove('error')
 
   const target = websocketURL()
-  const payload = JSON.stringify({ v: 1, type: 'echo', text: `ping-${Date.now()}` })
+  const payload = JSON.stringify({ v: 1, type: 'ping' })
   const current = new WebSocket(target)
   socket = current
   const timeout = window.setTimeout(() => {
@@ -69,19 +70,19 @@ function testEcho(): void {
 
   current.addEventListener('open', () => {
     appendLog(`已连接 ${target}`)
-    wsStatus.textContent = '已发送，等待回显…'
+    wsStatus.textContent = '已发送 ping，等待 pong…'
     current.send(payload)
   })
 
   current.addEventListener('message', (event) => {
     const text = typeof event.data === 'string' ? event.data : '<非文本消息>'
-    appendLog(`收到回显：${text}`)
-    if (text === payload) {
+    appendLog(`收到消息：${text}`)
+    if (isPongPayload(text)) {
       window.clearTimeout(timeout)
       wsStatus.textContent = 'WebSocket 往返成功'
       current.close()
     } else {
-      wsStatus.textContent = '收到非预期回显'
+      wsStatus.textContent = '收到非预期响应'
       wsStatus.classList.add('error')
     }
   })

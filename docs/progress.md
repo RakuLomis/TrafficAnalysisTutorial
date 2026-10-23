@@ -11,7 +11,7 @@
 | --- | --- | --- | --- | --- | --- |
 | A 范围和契约 | 6 | 6 | 0 | 0 | 0 |
 | B 最小服务和 LAN 验证 | 8 | 8 | 0 | 0 | 0 |
-| C 状态中心和参与者接入 | 9 | 3 | 0 | 6 | 0 |
+| C 状态中心和参与者接入 | 9 | 9 | 0 | 0 | 0 |
 | D 会话和明文闭环 | 10 | 0 | 0 | 10 | 0 |
 | E 浏览器真实加密闭环 | 10 | 0 | 0 | 10 | 0 |
 | F 学生界面和共享拓扑 | 10 | 0 | 0 | 10 | 0 |
@@ -21,7 +21,7 @@
 | J 主要风险验证 | 12 | 0 | 0 | 12 | 0 |
 | K 课堂演练和交付 | 5 | 0 | 0 | 5 | 0 |
 | X 可选扩展 | 4 | 0 | 0 | 4 | 0 |
-| 合计（V1） | 96 | 17 | 0 | 79 | 0 |
+| 合计（V1） | 96 | 23 | 0 | 73 | 0 |
 
 ## 2. 任务状态
 
@@ -56,12 +56,12 @@
 | C01 | 协议解析和结构化错误 | 已完成 | internal/protocol | 版本/类型/字段/重复键/UTF-8/Base64/长度均有测试；覆盖 join、resume、邀请、密钥、聊天、管理与课堂控制 | 服务端回复消息类型待 C06 起按需补齐 |
 | C02 | 内存模型和随机标识生成 | 已完成 | internal/hub/model.go | 参与者/会话/轮次/连接模型测试；ID 与 token 由 crypto/rand 生成并校验格式 | 无 |
 | C03 | Hub 串行状态循环 | 已完成 | internal/hub/hub.go | 100 并发连接与 20 并发快照无竞态；重复 epoch 拒绝；断线标记离线；Touch 更新；快照隔离；关闭时关闭 Peer | 尚未接入 transport；会话/邀请状态命令待 D 阶段 |
-| C04 | 正式连接读写与有界队列 | 待执行 | internal/transport 连接对象 | 单写出口；读大小/写超时/队列受控 | 无 |
-| C05 | 本机教师鉴权 | 待执行 | 管理 token 与 Origin 校验 | 公共入口不能获得管理角色 | 无 |
-| C06 | 临时昵称加入 | 待执行 | join 与 welcome | 中文/重名可加入；不泄露他人 token | 无 |
-| C07 | 公开快照和拓扑版本 | 待执行 | snapshot 与 topology.changed | 在线名单一致；公开投影无敏感字段 | 无 |
-| C08 | 心跳和连接代次校验 | 待执行 | 活性检查与旧连接过滤 | 失联检测；旧 epoch 不影响新连接 | 无 |
-| C09 | 接入和操作限额 | 待执行 | 集中限额与令牌桶 | 满员/过大/过快有明确结果 | 无 |
+| C04 | 正式连接读写与有界队列 | 已完成 | internal/transport/connection.go | 单写协程；队列条数/字节溢出返回 ErrSlowClient；读上限、写超时、优雅排空；单元与真实 WS 测试 | 无 |
+| C05 | 本机教师鉴权 | 已完成 | 管理 token、Origin/Host 校验、admin.auth | 正确 token 返回 admin.welcome；错误 token UNAUTHORIZED 并关闭；公共入口 admin.auth 返回 FORBIDDEN | 观察/控制动作在 G/H 阶段接入 |
+| C06 | 临时昵称加入 | 已完成 | join/welcome、短编号、颜色、resume token | 中文/同名加入测试；ID/短编号/颜色/token 唯一；welcome 含本人身份和公开快照 | 同页恢复 resume 在 H02 |
+| C07 | 公开快照和拓扑版本 | 已完成 | welcome 内嵌快照、topology.changed | 在线名单与快照一致；版本单调；公开投影无 token/密钥；加入/断线广播测试 | 独立 snapshot 推送在 H02 恢复流程中使用 |
+| C08 | 心跳和连接代次校验 | 已完成 | 心跳超时关闭、epoch/round 守卫 | 空闲连接按 dead_timeout 关闭；旧 epoch 消息 STALE_CONNECTION；旧 epoch 关闭不影响新连接；stale round 拒绝 | 服务端不主动 ping，依赖客户端心跳 |
+| C09 | 接入和操作限额 | 已完成 | 原始连接/教师/参与者/身份上限、join timeout、控制令牌桶 | 原始连接 503、参与者/身份/教师容量、未加入 10s 释放、RATE_LIMITED、64KiB 读上限均有测试 | 聊天速率与会话额度在 D/E 阶段接入 |
 
 ### 阶段 D 会话和明文消息闭环
 
@@ -229,6 +229,23 @@
   - Hub 尚未接入 transport；当前 EXE 仍使用开发期 echo。
   - 会话创建/邀请/超时/轮次重置命令及观察统计尚未实现，按 D/H/G 阶段推进。
   - C03 的定时器路径目前以 `TouchCommand` 表示连接活性；邀请/协商到期在 D09 接入。
+
+### 2026-10-23 C04—C09
+
+- 实现：
+  - 连接层：正式 WebSocket 连接对象、单写协程、有界队列（条数+字节）、读上限、写超时、优雅排空、心跳失联关闭、未加入超时释放、控制令牌桶。
+  - 接入层：原始连接/教师连接计数、学生与教师入口分离、Origin 校验；`admin.auth` 使用 32 字节随机 token，token 仅经本机 fragment 自动打开，不写入日志。
+  - 状态中心：join/welcome、重名短编号、颜色、resume token、公开快照、topology.changed、participant/identity/teacher 容量、round/epoch 守卫、旧连接回调隔离。
+  - 前端：自检从开发期 echo 改为 ping/pong，新增 `isPongPayload` 测试。
+- 验证：
+  - `go vet ./...`、`go test -race ./...` 全部通过。
+  - 真实 EXE：join 返回 welcome（短编号、43 字符 resume token、1 名在线参与者），随后 topology.changed，ping 返回 pong；错误教师 token 返回 UNAUTHORIZED；公共监听器 admin.auth 返回 FORBIDDEN。构建 SHA-256 `C0FF3A753FED3250C43144EAF527CA89BCDBD8F669699115E6871F7DB9BA44C6`。
+  - 传输测试覆盖：队列溢出、控制限速、join timeout、原始连接上限、心跳超时、错误/缺失 Origin、读上限、二进制拒绝。
+- 限制：
+  - 前端加入按钮仍禁用，F02 接入；教师页尚未消费 token fragment，G01 接入。
+  - 观察订阅/课堂控制/邀请/会话/聊天仍返回 FORBIDDEN，按 D/E/G/H 阶段实现。
+  - 独立 snapshot 消息与 resume 在 H02 完成；当前 welcome 已内嵌完整公开快照。
+  - 服务端不主动发送 ping，依赖客户端 15 秒心跳。
 
 ## 4. 交接约定
 

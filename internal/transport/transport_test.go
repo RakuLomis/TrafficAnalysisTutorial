@@ -3,7 +3,9 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,26 +14,100 @@ import (
 	"time"
 
 	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/config"
+	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/hub"
+	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/protocol"
 	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/web"
 	"github.com/coder/websocket"
 )
+
+const testAdminToken = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 func testConfig() config.Config {
 	cfg := config.Default()
 	cfg.StudentAddr = "127.0.0.1:0"
 	cfg.TeacherAddr = "127.0.0.1:0"
 	cfg.MaxWSMessageBytes = 1024
+	cfg.JoinTimeout = 5 * time.Second
+	cfg.HeartbeatInterval = time.Second
+	cfg.DeadTimeout = 3 * time.Second
 	return cfg
 }
 
-func testServer(t *testing.T) *Server {
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func testServerWithConfig(t *testing.T, mutate func(*config.Config)) *Server {
 	t.Helper()
 	cfg := testConfig()
+	if mutate != nil {
+		mutate(&cfg)
+	}
+	h, err := hub.NewWithOptions(cfg, discardLogger(), hub.Options{
+		AdminToken:    testAdminToken,
+		ServerVersion: "test",
+	})
+	if err != nil {
+		t.Fatalf("hub.New: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go h.Run(ctx)
+	t.Cleanup(func() {
+		cancel()
+		<-h.Done()
+	})
 	return New(cfg, web.StudentHandler(), web.TeacherHandler(), Info{
 		Version:    "test",
-		RoundID:    "00112233445566778899aabbccddeeff",
+		RoundID:    h.RoundID(),
 		StudentURL: "http://192.168.5.5:8080/",
-	}, nil)
+		Hub:        h,
+	}, discardLogger())
+}
+
+func testServer(t *testing.T) *Server {
+	return testServerWithConfig(t, nil)
+}
+
+func dialWS(t *testing.T, serverURL, path string) *websocket.Conn {
+	t.Helper()
+	conn, _, err := websocket.Dial(context.Background(), "ws"+strings.TrimPrefix(serverURL, "http")+path, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Origin": []string{serverURL}},
+	})
+	if err != nil {
+		t.Fatalf("dial %s: %v", path, err)
+	}
+	return conn
+}
+
+func writeMessage(t *testing.T, conn *websocket.Conn, value any) {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+}
+
+func readMessage[T any](t *testing.T, conn *websocket.Conn) T {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	typ, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if typ != websocket.MessageText {
+		t.Fatalf("message type = %v", typ)
+	}
+	var target T
+	if err := json.Unmarshal(data, &target); err != nil {
+		t.Fatalf("unmarshal %s: %v", data, err)
+	}
+	return target
 }
 
 func TestCheckOrigin(t *testing.T) {
@@ -93,11 +169,12 @@ func TestPublicConfigEndpoint(t *testing.T) {
 	if limits["max_body_bytes"].(float64) != 4096 {
 		t.Errorf("max_body_bytes = %v", limits["max_body_bytes"])
 	}
+	round := body["round"].(map[string]any)
+	if round["id"] != s.info.Hub.RoundID() {
+		t.Errorf("round id = %v, want %s", round["id"], s.info.Hub.RoundID())
+	}
 	if _, ok := body["iface_candidates"]; ok {
 		t.Error("public config leaked iface_candidates")
-	}
-	if _, ok := body["resume_token"]; ok {
-		t.Error("public config leaked resume_token")
 	}
 }
 
@@ -158,37 +235,61 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
-func TestEchoRoundTrip(t *testing.T) {
+func TestPingRoundTrip(t *testing.T) {
 	s := testServer(t)
 	server := httptest.NewServer(s.studentHandler())
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	conn, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/ws", &websocket.DialOptions{
-		HTTPHeader: http.Header{"Origin": []string{server.URL}},
-	})
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
+	conn := dialWS(t, server.URL, "/ws")
 	defer conn.CloseNow()
-	if resp.Header.Get("Sec-WebSocket-Extensions") != "" {
-		t.Fatalf("compression negotiated: %q", resp.Header.Get("Sec-WebSocket-Extensions"))
+	writeMessage(t, conn, &protocol.Ping{V: 1, Type: "ping"})
+	pong := readMessage[*protocol.Pong](t, conn)
+	if pong.Type != "pong" || pong.ServerTimeUTC == "" {
+		t.Fatalf("pong = %+v", pong)
 	}
+}
 
-	payload := `{"v":1,"type":"echo","text":"ping"}`
-	if err := conn.Write(ctx, websocket.MessageText, []byte(payload)); err != nil {
-		t.Fatalf("write: %v", err)
+func TestJoinRoundTrip(t *testing.T) {
+	s := testServer(t)
+	server := httptest.NewServer(s.studentHandler())
+	defer server.Close()
+
+	conn := dialWS(t, server.URL, "/ws")
+	defer conn.CloseNow()
+	join := &protocol.Join{
+		V:         1,
+		Type:      "join",
+		RequestID: mustID(t),
+		RoundID:   s.info.Hub.RoundID(),
+		Nickname:  "小明",
 	}
-	typ, data, err := conn.Read(ctx)
-	if err != nil {
-		t.Fatalf("read: %v", err)
+	writeMessage(t, conn, join)
+	welcome := readMessage[*protocol.Welcome](t, conn)
+	if welcome.RequestID != join.RequestID {
+		t.Errorf("request_id = %q", welcome.RequestID)
 	}
-	if typ != websocket.MessageText {
-		t.Fatalf("type = %v", typ)
+	if welcome.Nickname != "小明" {
+		t.Errorf("nickname = %q", welcome.Nickname)
 	}
-	if string(data) != payload {
-		t.Fatalf("echo = %q, want %q", data, payload)
+	if !protocol.ValidID(welcome.ParticipantID) || !protocol.ValidToken(welcome.ResumeToken) {
+		t.Errorf("identity = %+v", welcome)
+	}
+	if welcome.ConnectionEpoch == "" {
+		t.Error("missing connection epoch")
+	}
+}
+
+func TestInvalidMessageGetsStructuredError(t *testing.T) {
+	s := testServer(t)
+	server := httptest.NewServer(s.studentHandler())
+	defer server.Close()
+
+	conn := dialWS(t, server.URL, "/ws")
+	defer conn.CloseNow()
+	writeMessage(t, conn, map[string]any{"v": 1, "type": "not-a-real-type"})
+	errorMessage := readMessage[*protocol.ErrorMessage](t, conn)
+	if errorMessage.Code != protocol.CodeInvalidMessage {
+		t.Fatalf("code = %s", errorMessage.Code)
 	}
 }
 
@@ -231,17 +332,11 @@ func TestReadLimitClosesConnection(t *testing.T) {
 	server := httptest.NewServer(s.studentHandler())
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/ws", &websocket.DialOptions{
-		HTTPHeader: http.Header{"Origin": []string{server.URL}},
-	})
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
+	conn := dialWS(t, server.URL, "/ws")
 	defer conn.CloseNow()
-
 	oversized := strings.Repeat("x", 2048)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	if err := conn.Write(ctx, websocket.MessageText, []byte(oversized)); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -255,16 +350,10 @@ func TestRejectsBinaryMessage(t *testing.T) {
 	server := httptest.NewServer(s.studentHandler())
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/ws", &websocket.DialOptions{
-		HTTPHeader: http.Header{"Origin": []string{server.URL}},
-	})
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
+	conn := dialWS(t, server.URL, "/ws")
 	defer conn.CloseNow()
-
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	if err := conn.Write(ctx, websocket.MessageBinary, []byte{1, 2, 3}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -273,22 +362,80 @@ func TestRejectsBinaryMessage(t *testing.T) {
 	}
 }
 
+func TestAdminAuth(t *testing.T) {
+	s := testServer(t)
+	server := httptest.NewServer(s.teacherHandler())
+	defer server.Close()
+
+	conn := dialWS(t, server.URL, "/ws/admin")
+	defer conn.CloseNow()
+	requestID := mustID(t)
+	writeMessage(t, conn, &protocol.AdminAuth{V: 1, Type: "admin.auth", RequestID: requestID, Token: testAdminToken})
+	welcome := readMessage[*protocol.AdminWelcome](t, conn)
+	if welcome.RequestID != requestID {
+		t.Errorf("request_id = %q", welcome.RequestID)
+	}
+	if welcome.ServerVersion != "test" {
+		t.Errorf("server version = %q", welcome.ServerVersion)
+	}
+	if welcome.Round.ID != s.info.Hub.RoundID() {
+		t.Errorf("round = %+v", welcome.Round)
+	}
+}
+
+func TestAdminAuthRejectsWrongToken(t *testing.T) {
+	s := testServer(t)
+	server := httptest.NewServer(s.teacherHandler())
+	defer server.Close()
+
+	conn := dialWS(t, server.URL, "/ws/admin")
+	defer conn.CloseNow()
+	writeMessage(t, conn, &protocol.AdminAuth{V: 1, Type: "admin.auth", RequestID: mustID(t), Token: strings.Repeat("B", 43)})
+	errorMessage := readMessage[*protocol.ErrorMessage](t, conn)
+	if errorMessage.Code != protocol.CodeUnauthorized {
+		t.Fatalf("code = %s", errorMessage.Code)
+	}
+}
+
+func TestPublicConnectionCannotAuthenticateAsAdmin(t *testing.T) {
+	s := testServer(t)
+	server := httptest.NewServer(s.studentHandler())
+	defer server.Close()
+
+	conn := dialWS(t, server.URL, "/ws")
+	defer conn.CloseNow()
+	writeMessage(t, conn, &protocol.AdminAuth{V: 1, Type: "admin.auth", RequestID: mustID(t), Token: testAdminToken})
+	errorMessage := readMessage[*protocol.ErrorMessage](t, conn)
+	if errorMessage.Code != protocol.CodeForbidden {
+		t.Fatalf("code = %s", errorMessage.Code)
+	}
+}
+
 func TestTeacherHasNoStudentWebSocket(t *testing.T) {
 	s := testServer(t)
 	server := httptest.NewServer(s.teacherHandler())
 	defer server.Close()
 
-	for _, path := range []string{"/ws", "/ws/admin"} {
-		req, _ := http.NewRequest(http.MethodGet, server.URL+path, nil)
-		req.Host = "127.0.0.1"
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("request %s: %v", path, err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusNotFound {
-			t.Errorf("%s status = %d, want 404", path, resp.StatusCode)
-		}
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/ws", nil)
+	req.Host = "127.0.0.1"
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request /ws: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("/ws status = %d, want 404", resp.StatusCode)
+	}
+
+	req, _ = http.NewRequest(http.MethodGet, server.URL+"/ws/admin", nil)
+	req.Host = "127.0.0.1"
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request /ws/admin: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("/ws/admin status = %d, want 403 without Origin", resp.StatusCode)
 	}
 }
 
@@ -305,6 +452,118 @@ func TestStudentHasNoAdminEndpoint(t *testing.T) {
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("%s status = %d, want 404", path, resp.StatusCode)
 		}
+	}
+}
+
+func TestJoinTimeoutReleasesConnection(t *testing.T) {
+	s := testServerWithConfig(t, func(cfg *config.Config) {
+		cfg.JoinTimeout = 100 * time.Millisecond
+	})
+	server := httptest.NewServer(s.studentHandler())
+	defer server.Close()
+
+	conn := dialWS(t, server.URL, "/ws")
+	defer conn.CloseNow()
+	errorMessage := readMessage[*protocol.ErrorMessage](t, conn)
+	if errorMessage.Code != protocol.CodeInvalidMessage || !strings.Contains(errorMessage.Message, "join timeout") {
+		t.Fatalf("error = %+v", errorMessage)
+	}
+}
+
+func TestRawConnectionLimit(t *testing.T) {
+	s := testServerWithConfig(t, func(cfg *config.Config) {
+		cfg.MaxRawConnections = 1
+	})
+	server := httptest.NewServer(s.studentHandler())
+	defer server.Close()
+
+	first := dialWS(t, server.URL, "/ws")
+	defer first.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/ws", &websocket.DialOptions{
+		HTTPHeader: http.Header{"Origin": []string{server.URL}},
+	})
+	if err == nil {
+		t.Fatal("second connection accepted, want capacity rejection")
+	}
+	if resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("response = %+v, want 503", resp)
+	}
+}
+
+func TestControlRateLimit(t *testing.T) {
+	s := testServerWithConfig(t, func(cfg *config.Config) {
+		cfg.ControlRatePerSec = 1
+		cfg.ControlBurst = 1
+	})
+	server := httptest.NewServer(s.studentHandler())
+	defer server.Close()
+
+	conn := dialWS(t, server.URL, "/ws")
+	defer conn.CloseNow()
+	writeMessage(t, conn, &protocol.Ping{V: 1, Type: "ping"})
+	writeMessage(t, conn, &protocol.Ping{V: 1, Type: "ping"})
+
+	var pong *protocol.Pong
+	var rateLimited *protocol.ErrorMessage
+	for i := 0; i < 2; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		typ, data, err := conn.Read(ctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if typ != websocket.MessageText {
+			t.Fatalf("type = %v", typ)
+		}
+		var head struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(data, &head); err != nil {
+			t.Fatalf("json: %v", err)
+		}
+		switch head.Type {
+		case "pong":
+			var value protocol.Pong
+			_ = json.Unmarshal(data, &value)
+			pong = &value
+		case "error":
+			var value protocol.ErrorMessage
+			_ = json.Unmarshal(data, &value)
+			rateLimited = &value
+		}
+	}
+	if pong == nil {
+		t.Fatal("missing pong")
+	}
+	if rateLimited == nil || rateLimited.Code != protocol.CodeRateLimited {
+		t.Fatalf("rate limit error = %+v", rateLimited)
+	}
+}
+
+func TestConnectionQueueOverflow(t *testing.T) {
+	cfg := testConfig()
+	cfg.SendQueueCount = 1
+	cfg.SendQueueBytes = 1024
+	conn := &Connection{cfg: cfg, queue: make(chan []byte, 1)}
+	if err := conn.Send(map[string]string{"text": strings.Repeat("a", 100)}); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	if err := conn.Send(map[string]string{"text": "second"}); !errors.Is(err, ErrSlowClient) {
+		t.Fatalf("second send error = %v, want ErrSlowClient", err)
+	}
+
+	cfg.SendQueueCount = 10
+	cfg.SendQueueBytes = 10
+	conn = &Connection{cfg: cfg, queue: make(chan []byte, 10)}
+	if err := conn.Send(map[string]string{"text": strings.Repeat("a", 100)}); !errors.Is(err, ErrSlowClient) {
+		t.Fatalf("byte limit error = %v, want ErrSlowClient", err)
+	}
+	conn.closed.Store(true)
+	if err := conn.Send(map[string]string{"text": "closed"}); !errors.Is(err, ErrConnectionClosed) {
+		t.Fatalf("closed send error = %v", err)
 	}
 }
 
@@ -343,11 +602,20 @@ func TestStartFailsWhenStudentPortBusy(t *testing.T) {
 
 	cfg := testConfig()
 	cfg.StudentAddr = ln.Addr().String()
-	s := New(cfg, web.StudentHandler(), web.TeacherHandler(), Info{Version: "test", RoundID: "00"}, nil)
+	s := New(cfg, web.StudentHandler(), web.TeacherHandler(), Info{Version: "test", RoundID: "00"}, discardLogger())
 	if err := s.Start(); err == nil {
 		t.Fatal("Start succeeded, want port conflict error")
 	}
 	if s.TeacherAddr() != nil {
 		t.Fatal("teacher listener left bound after student failure")
 	}
+}
+
+func mustID(t *testing.T) string {
+	t.Helper()
+	id, err := protocol.NewID()
+	if err != nil {
+		t.Fatalf("NewID: %v", err)
+	}
+	return id
 }

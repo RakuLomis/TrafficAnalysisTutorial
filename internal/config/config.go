@@ -31,6 +31,8 @@ type Config struct {
 	DeadTimeout       time.Duration
 	ResumeWindow      time.Duration
 	AckTimeout        time.Duration
+	WriteTimeout      time.Duration
+	JoinTimeout       time.Duration
 
 	MaxBodyBytes       int
 	MaxCiphertextBytes int
@@ -46,6 +48,8 @@ type Config struct {
 	SendQueueBytes          int
 	ChatRatePerSec          int
 	ChatBurst               int
+	ControlRatePerSec       int
+	ControlBurst            int
 	ClientHistoryPerSession int
 	ClientCacheBytes        int
 	RenderInterval          time.Duration
@@ -76,6 +80,8 @@ func Default() Config {
 		DeadTimeout:       45 * time.Second,
 		ResumeWindow:      60 * time.Second,
 		AckTimeout:        5 * time.Second,
+		WriteTimeout:      5 * time.Second,
+		JoinTimeout:       10 * time.Second,
 
 		MaxBodyBytes:       4096,
 		MaxCiphertextBytes: 32768,
@@ -91,6 +97,8 @@ func Default() Config {
 		SendQueueBytes:          256 << 10,
 		ChatRatePerSec:          2,
 		ChatBurst:               5,
+		ControlRatePerSec:       10,
+		ControlBurst:            20,
 		ClientHistoryPerSession: 200,
 		ClientCacheBytes:        3 << 20,
 		RenderInterval:          100 * time.Millisecond,
@@ -177,6 +185,12 @@ func (c Config) Validate() error {
 	if c.AckTimeout <= 0 {
 		return fieldErr("ack_timeout", "must be positive")
 	}
+	if c.WriteTimeout <= 0 {
+		return fieldErr("write_timeout", "must be positive")
+	}
+	if c.JoinTimeout <= 0 {
+		return fieldErr("join_timeout", "must be positive")
+	}
 	if c.MaxBodyBytes < 1 {
 		return fieldErr("max_body_bytes", "must be positive")
 	}
@@ -212,6 +226,12 @@ func (c Config) Validate() error {
 	}
 	if c.ChatBurst < 1 {
 		return fieldErr("chat_burst", "must be positive")
+	}
+	if c.ControlRatePerSec < 1 {
+		return fieldErr("control_rate_per_sec", "must be positive")
+	}
+	if c.ControlBurst < 1 {
+		return fieldErr("control_burst", "must be positive")
 	}
 	if c.ClientHistoryPerSession < 1 {
 		return fieldErr("client_history_per_session", "must be positive")

@@ -106,6 +106,10 @@
 | `dead_timeout` | 45s | > 心跳 | 失联判定 |
 | `resume_window` | 60s | 10s—5m | 同页身份恢复 |
 | `ack_timeout` | 5s | 1s—30s | 正常网络回执超时 |
+| `write_timeout` | 5s | 1s—30s | 单次 WebSocket 写超时 |
+| `join_timeout` | 10s | 3s—60s | 未加入或未认证连接释放 |
+| `control_rate_per_sec` | 10 | 1—100 | 每连接控制消息速率 |
+| `control_burst` | 20 | 1—200 | 控制消息短时突发 |
 | `max_body_bytes` | 4096 | 1—65536 | 用户正文 UTF-8 字节数 |
 | `max_ciphertext_bytes` | 32768 | ≥ 4096 | Base64 解码后的密文体 |
 | `max_ws_message_bytes` | 65536 | ≤ 1 MiB | 完整 WebSocket 应用消息 |
