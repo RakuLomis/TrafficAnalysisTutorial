@@ -89,6 +89,7 @@ func run(cfg config.Config) error {
 		classroom.Run(hubCtx)
 		close(hubDone)
 	}()
+	classroom.StartTimers(hubCtx, 500*time.Millisecond)
 	defer func() {
 		hubCancel()
 		<-hubDone

@@ -112,9 +112,9 @@ type ChatSend struct {
 	SessionCommand
 	MessageID     string  `json:"message_id"`
 	Seq           string  `json:"seq"`
-	Text          *string `json:"-"`
-	NonceB64      string  `json:"nonce_b64"`
-	CiphertextB64 string  `json:"ciphertext_b64"`
+	Text          *string `json:"text,omitempty"`
+	NonceB64      string  `json:"nonce_b64,omitempty"`
+	CiphertextB64 string  `json:"ciphertext_b64,omitempty"`
 }
 
 func (*ChatSend) MessageType() string { return "chat.send" }

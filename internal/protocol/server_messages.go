@@ -14,11 +14,14 @@ type ParticipantView struct {
 }
 
 type SessionView struct {
-	SessionID string `json:"session_id"`
-	AID       string `json:"a_id"`
-	BID       string `json:"b_id"`
-	Mode      Mode   `json:"mode"`
-	State     string `json:"state"`
+	SessionID    string `json:"session_id"`
+	AID          string `json:"a_id"`
+	BID          string `json:"b_id"`
+	Mode         Mode   `json:"mode"`
+	State        string `json:"state"`
+	CreatedAtUTC string `json:"created_at_utc,omitempty"`
+	ExpiresAtUTC string `json:"expires_at_utc,omitempty"`
+	ClosedReason string `json:"closed_reason,omitempty"`
 }
 
 type Welcome struct {
@@ -96,4 +99,66 @@ func NewErrorMessage(err *Error) *ErrorMessage {
 		RequestID: err.RequestID,
 		SessionID: err.SessionID,
 	}
+}
+
+type SessionChanged struct {
+	V               int         `json:"v"`
+	Type            string      `json:"type"`
+	RoundID         string      `json:"round_id"`
+	ConnectionEpoch string      `json:"connection_epoch"`
+	Session         SessionView `json:"session"`
+}
+
+type ChatAccepted struct {
+	V               int    `json:"v"`
+	Type            string `json:"type"`
+	RequestID       string `json:"request_id"`
+	RoundID         string `json:"round_id"`
+	ConnectionEpoch string `json:"connection_epoch"`
+	SessionID       string `json:"session_id"`
+	MessageID       string `json:"message_id"`
+	Seq             string `json:"seq"`
+	AcceptedAtUTC   string `json:"accepted_at_utc"`
+}
+
+type ChatDeliver struct {
+	V               int     `json:"v"`
+	Type            string  `json:"type"`
+	RoundID         string  `json:"round_id"`
+	ConnectionEpoch string  `json:"connection_epoch"`
+	SessionID       string  `json:"session_id"`
+	MessageID       string  `json:"message_id"`
+	SenderID        string  `json:"sender_id"`
+	Seq             string  `json:"seq"`
+	Text            *string `json:"text,omitempty"`
+	NonceB64        string  `json:"nonce_b64,omitempty"`
+	CiphertextB64   string  `json:"ciphertext_b64,omitempty"`
+	SentAtUTC       string  `json:"sent_at_utc"`
+}
+
+type ChatStatus struct {
+	V               int    `json:"v"`
+	Type            string `json:"type"`
+	RoundID         string `json:"round_id"`
+	ConnectionEpoch string `json:"connection_epoch"`
+	SessionID       string `json:"session_id"`
+	MessageID       string `json:"message_id"`
+	Status          string `json:"status"`
+	AtUTC           string `json:"at_utc"`
+}
+
+type ActivityEvent struct {
+	SessionID string `json:"session_id"`
+	MessageID string `json:"message_id"`
+	SenderID  string `json:"sender_id"`
+	Direction string `json:"direction"`
+	AtUTC     string `json:"at_utc"`
+}
+
+type ActivityBatch struct {
+	V               int             `json:"v"`
+	Type            string          `json:"type"`
+	RoundID         string          `json:"round_id"`
+	ConnectionEpoch string          `json:"connection_epoch"`
+	Events          []ActivityEvent `json:"events"`
 }

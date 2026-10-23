@@ -47,6 +47,10 @@ type hubState struct {
 	connections     map[string]*Connection
 	resumeTokens    map[string]string
 	shortIDs        map[string]string
+	pairSessions    map[string]string
+	sendSeq         map[string]*seqState
+	dedup           map[string]*dedupCache
+	pending         map[string]*pendingMessage
 	nextColor       int
 	topologyVersion uint64
 }
@@ -80,6 +84,63 @@ type TouchCommand struct {
 
 func (c TouchCommand) apply(h *Hub) {
 	h.touch(c.Epoch, c.At)
+}
+
+type TickCommand struct {
+	Now time.Time
+}
+
+func (c TickCommand) apply(h *Hub) {
+	h.expire(c.Now)
+}
+
+type seqState struct {
+	last uint64
+	has  bool
+}
+
+type dedupCache struct {
+	entries map[string]string
+	order   []string
+	limit   int
+}
+
+func newDedupCache(limit int) *dedupCache {
+	return &dedupCache{entries: make(map[string]string), limit: limit}
+}
+
+func (c *dedupCache) get(key string) (string, bool) {
+	value, ok := c.entries[key]
+	return value, ok
+}
+
+func (c *dedupCache) add(key, fingerprint string) {
+	if _, exists := c.entries[key]; exists {
+		c.entries[key] = fingerprint
+		return
+	}
+	c.entries[key] = fingerprint
+	c.order = append(c.order, key)
+	for len(c.order) > c.limit {
+		oldest := c.order[0]
+		c.order = c.order[1:]
+		delete(c.entries, oldest)
+	}
+}
+
+type pendingMessage struct {
+	SessionID     string
+	SenderID      string
+	RecipientID   string
+	MessageID     string
+	Direction     string
+	Mode          protocol.Mode
+	Seq           string
+	Text          *string
+	NonceB64      string
+	CiphertextB64 string
+	AcceptedAt    time.Time
+	ReceiptStatus string
 }
 
 type MessageCommand struct {
@@ -157,6 +218,10 @@ func newHubWithOptions(cfg config.Config, logger *slog.Logger, now func() time.T
 			connections:  make(map[string]*Connection),
 			resumeTokens: make(map[string]string),
 			shortIDs:     make(map[string]string),
+			pairSessions: make(map[string]string),
+			sendSeq:      make(map[string]*seqState),
+			dedup:        make(map[string]*dedupCache),
+			pending:      make(map[string]*pendingMessage),
 		},
 	}
 	h.roundID.Store(round.ID)
@@ -180,6 +245,24 @@ func (h *Hub) Run(ctx context.Context) {
 
 func (h *Hub) Done() <-chan struct{} {
 	return h.done
+}
+
+func (h *Hub) StartTimers(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 500 * time.Millisecond
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				_ = h.Submit(ctx, TickCommand{Now: now})
+			}
+		}
+	}()
 }
 
 func (h *Hub) RoundID() string {
@@ -312,7 +395,22 @@ func (h *Hub) handleMessage(epoch string, message protocol.Message) {
 			h.sendError(conn, protocol.CodeStaleRound, "round has changed", requestIDOf(message), sessionIDOf(message))
 			return
 		}
-		h.sendError(conn, protocol.CodeForbidden, "message is not available yet", requestIDOf(message), sessionIDOf(message))
+		switch msg := message.(type) {
+		case *protocol.InviteCreate:
+			h.handleInviteCreate(conn, msg)
+		case *protocol.InviteRespond:
+			h.handleInviteRespond(conn, msg)
+		case *protocol.InviteCancel:
+			h.handleInviteCancel(conn, msg)
+		case *protocol.SessionClose:
+			h.handleSessionClose(conn, msg)
+		case *protocol.ChatSend:
+			h.handleChatSend(conn, msg)
+		case *protocol.ChatReceipt:
+			h.handleChatReceipt(conn, msg)
+		default:
+			h.sendError(conn, protocol.CodeForbidden, "message is not available yet", requestIDOf(message), sessionIDOf(message))
+		}
 	}
 }
 
@@ -446,6 +544,447 @@ func (h *Hub) handleAdminAuth(conn *Connection, msg *protocol.AdminAuth) {
 	})
 }
 
+func (h *Hub) handleInviteCreate(conn *Connection, msg *protocol.InviteCreate) {
+	sender, ok := h.state.participants[conn.ParticipantID]
+	if !ok {
+		h.sendError(conn, protocol.CodeNotMember, "sender is not a participant", msg.RequestID, "")
+		return
+	}
+	target, ok := h.state.participants[msg.TargetID]
+	if !ok || !target.IsOnline() {
+		h.sendError(conn, protocol.CodeNotMember, "target is not online", msg.RequestID, "")
+		return
+	}
+	if target.ID == sender.ID {
+		h.sendError(conn, protocol.CodeInvalidMessage, "cannot invite yourself", msg.RequestID, "")
+		return
+	}
+	pair := PairKey(sender.ID, target.ID)
+	if sessionID, exists := h.state.pairSessions[pair]; exists {
+		if session, ok := h.state.sessions[sessionID]; ok && session.IsOpen() {
+			h.sendError(conn, protocol.CodeSessionExists, "session already exists", msg.RequestID, session.ID)
+			h.sendSessionChanged(session)
+			return
+		}
+		delete(h.state.pairSessions, pair)
+	}
+	if h.openSessionCount(sender.ID) >= h.cfg.MaxSessionsPerParticipant || h.openSessionCount(target.ID) >= h.cfg.MaxSessionsPerParticipant {
+		h.sendError(conn, protocol.CodeCapacityReached, "session capacity reached", msg.RequestID, "")
+		return
+	}
+	sessionID, err := protocol.NewID()
+	if err != nil {
+		h.sendError(conn, protocol.CodeInternal, "cannot allocate session", msg.RequestID, "")
+		return
+	}
+	now := h.now()
+	session, err := NewSession(sessionID, sender.ID, target.ID, msg.Mode, now, now.Add(h.cfg.InviteTimeout))
+	if err != nil {
+		h.sendError(conn, protocol.CodeInvalidMessage, "cannot create session", msg.RequestID, "")
+		return
+	}
+	h.state.sessions[session.ID] = session
+	h.state.pairSessions[pair] = session.ID
+	h.state.topologyVersion++
+	h.sendSessionChanged(session)
+	h.broadcastTopology()
+}
+
+func (h *Hub) handleInviteRespond(conn *Connection, msg *protocol.InviteRespond) {
+	session, ok := h.state.sessions[msg.SessionID]
+	if !ok {
+		h.sendError(conn, protocol.CodeNotMember, "session not found", msg.RequestID, msg.SessionID)
+		return
+	}
+	if conn.ParticipantID != session.BID {
+		h.sendError(conn, protocol.CodeNotMember, "only the invitee can respond", msg.RequestID, msg.SessionID)
+		return
+	}
+	if session.State != SessionInvited {
+		code := protocol.CodeInvalidMessage
+		message := "session is not waiting for a response"
+		if session.State == SessionClosed && session.ClosedReason == "invite_timeout" {
+			code = protocol.CodeInviteExpired
+			message = "invite has expired"
+		}
+		h.sendError(conn, code, message, msg.RequestID, msg.SessionID)
+		return
+	}
+	now := h.now()
+	if !session.ExpiresAt.IsZero() && !now.Before(session.ExpiresAt) {
+		h.closeSession(session, "invite_timeout")
+		h.sendError(conn, protocol.CodeInviteExpired, "invite has expired", msg.RequestID, msg.SessionID)
+		return
+	}
+	if msg.Accept == nil {
+		h.sendError(conn, protocol.CodeInvalidMessage, "accept is required", msg.RequestID, msg.SessionID)
+		return
+	}
+	if *msg.Accept {
+		session.Accept(now.Add(h.cfg.KeyTimeout))
+		h.state.topologyVersion++
+		h.sendSessionChanged(session)
+		h.broadcastTopology()
+		return
+	}
+	h.closeSession(session, "rejected")
+}
+
+func (h *Hub) handleInviteCancel(conn *Connection, msg *protocol.InviteCancel) {
+	session, ok := h.state.sessions[msg.SessionID]
+	if !ok || !session.Contains(conn.ParticipantID) {
+		h.sendError(conn, protocol.CodeNotMember, "session not found", msg.RequestID, msg.SessionID)
+		return
+	}
+	if conn.ParticipantID != session.AID {
+		h.sendError(conn, protocol.CodeNotMember, "only the inviter can cancel", msg.RequestID, msg.SessionID)
+		return
+	}
+	if session.State != SessionInvited {
+		h.sendError(conn, protocol.CodeInvalidMessage, "session is not an invite", msg.RequestID, msg.SessionID)
+		return
+	}
+	h.closeSession(session, "cancelled")
+}
+
+func (h *Hub) handleSessionClose(conn *Connection, msg *protocol.SessionClose) {
+	session, ok := h.state.sessions[msg.SessionID]
+	if !ok || !session.Contains(conn.ParticipantID) {
+		h.sendError(conn, protocol.CodeNotMember, "session not found", msg.RequestID, msg.SessionID)
+		return
+	}
+	if session.State == SessionClosed {
+		h.sendSessionChanged(session)
+		return
+	}
+	h.closeSession(session, msg.Reason)
+}
+
+func (h *Hub) handleChatSend(conn *Connection, msg *protocol.ChatSend) {
+	session, ok := h.state.sessions[msg.SessionID]
+	if !ok || !session.Contains(conn.ParticipantID) {
+		h.sendError(conn, protocol.CodeNotMember, "session not found", msg.RequestID, msg.SessionID)
+		return
+	}
+	if session.State != SessionActive {
+		h.sendError(conn, protocol.CodeNotActive, "session is not active", msg.RequestID, msg.SessionID)
+		return
+	}
+	senderID := conn.ParticipantID
+	recipientID := session.Counterpart(senderID)
+	direction := session.Direction(senderID)
+
+	var fingerprint string
+	switch session.Mode {
+	case protocol.ModePlaintext:
+		if msg.Text == nil {
+			h.sendError(conn, protocol.CodeModeMismatch, "plaintext session requires text", msg.RequestID, msg.SessionID)
+			return
+		}
+		fingerprint = "p|" + msg.Seq + "|" + *msg.Text
+	case protocol.ModeEncrypted:
+		if msg.Text != nil {
+			h.sendError(conn, protocol.CodeModeMismatch, "encrypted session must not carry text", msg.RequestID, msg.SessionID)
+			return
+		}
+		fingerprint = "e|" + msg.Seq + "|" + msg.NonceB64 + "|" + msg.CiphertextB64
+	default:
+		h.sendError(conn, protocol.CodeModeMismatch, "unsupported session mode", msg.RequestID, msg.SessionID)
+		return
+	}
+
+	directionKey := session.ID + "|" + senderID
+	cache := h.state.dedup[directionKey]
+	if cache == nil {
+		cache = newDedupCache(128)
+		h.state.dedup[directionKey] = cache
+	}
+	if previous, found := cache.get(msg.MessageID); found {
+		if previous != fingerprint {
+			h.sendError(conn, protocol.CodeIDConflict, "message id reused with different payload", msg.RequestID, msg.SessionID)
+			return
+		}
+		h.resendAccepted(conn, session, senderID, recipientID, msg)
+		return
+	}
+
+	seq, err := protocol.ParseSeq(msg.Seq)
+	if err != nil {
+		h.sendError(conn, protocol.CodeInvalidMessage, "invalid seq", msg.RequestID, msg.SessionID)
+		return
+	}
+	seqKey := session.ID + "|" + senderID
+	state := h.state.sendSeq[seqKey]
+	if state == nil {
+		state = &seqState{}
+		h.state.sendSeq[seqKey] = state
+	}
+	if state.has && seq <= state.last {
+		h.sendError(conn, protocol.CodeInvalidMessage, "seq must increase", msg.RequestID, msg.SessionID)
+		return
+	}
+	state.last = seq
+	state.has = true
+	cache.add(msg.MessageID, fingerprint)
+
+	acceptedAt := h.now()
+	pending := &pendingMessage{
+		SessionID:     session.ID,
+		SenderID:      senderID,
+		RecipientID:   recipientID,
+		MessageID:     msg.MessageID,
+		Direction:     direction,
+		Mode:          session.Mode,
+		Seq:           msg.Seq,
+		Text:          msg.Text,
+		NonceB64:      msg.NonceB64,
+		CiphertextB64: msg.CiphertextB64,
+		AcceptedAt:    acceptedAt,
+		ReceiptStatus: "pending",
+	}
+	h.state.pending[pendingKey(session.ID, senderID, msg.MessageID)] = pending
+
+	h.send(conn, &protocol.ChatAccepted{
+		V:               1,
+		Type:            "chat.accepted",
+		RequestID:       msg.RequestID,
+		RoundID:         h.state.round.ID,
+		ConnectionEpoch: conn.Epoch,
+		SessionID:       session.ID,
+		MessageID:       msg.MessageID,
+		Seq:             msg.Seq,
+		AcceptedAtUTC:   formatUTC(acceptedAt),
+	})
+	h.broadcastActivity(protocol.ActivityEvent{
+		SessionID: session.ID,
+		MessageID: msg.MessageID,
+		SenderID:  senderID,
+		Direction: direction,
+		AtUTC:     formatUTC(acceptedAt),
+	})
+
+	recipientConn, ok := h.connectionFor(recipientID)
+	if !ok {
+		pending.ReceiptStatus = "failed"
+		h.sendStatus(pending, "failed", h.now())
+		return
+	}
+	deliver := &protocol.ChatDeliver{
+		V:               1,
+		Type:            "chat.deliver",
+		RoundID:         h.state.round.ID,
+		ConnectionEpoch: recipientConn.Epoch,
+		SessionID:       session.ID,
+		MessageID:       msg.MessageID,
+		SenderID:        senderID,
+		Seq:             msg.Seq,
+		Text:            msg.Text,
+		NonceB64:        msg.NonceB64,
+		CiphertextB64:   msg.CiphertextB64,
+		SentAtUTC:       formatUTC(acceptedAt),
+	}
+	if err := h.send(recipientConn, deliver); err != nil {
+		pending.ReceiptStatus = "failed"
+		h.sendStatus(pending, "failed", h.now())
+	}
+}
+
+func (h *Hub) resendAccepted(conn *Connection, session *Session, senderID, recipientID string, msg *protocol.ChatSend) {
+	acceptedAt := h.now()
+	if pending, ok := h.state.pending[pendingKey(session.ID, senderID, msg.MessageID)]; ok {
+		acceptedAt = pending.AcceptedAt
+	}
+	h.send(conn, &protocol.ChatAccepted{
+		V:               1,
+		Type:            "chat.accepted",
+		RequestID:       msg.RequestID,
+		RoundID:         h.state.round.ID,
+		ConnectionEpoch: conn.Epoch,
+		SessionID:       session.ID,
+		MessageID:       msg.MessageID,
+		Seq:             msg.Seq,
+		AcceptedAtUTC:   formatUTC(acceptedAt),
+	})
+}
+
+func (h *Hub) handleChatReceipt(conn *Connection, msg *protocol.ChatReceipt) {
+	session, ok := h.state.sessions[msg.SessionID]
+	if !ok || !session.Contains(conn.ParticipantID) {
+		h.sendError(conn, protocol.CodeNotMember, "session not found", msg.RequestID, msg.SessionID)
+		return
+	}
+	recipientID := conn.ParticipantID
+	senderID := session.Counterpart(recipientID)
+	pending, ok := h.state.pending[pendingKey(session.ID, senderID, msg.MessageID)]
+	if !ok || pending.RecipientID != recipientID {
+		h.sendError(conn, protocol.CodeNotMember, "message not found for this recipient", msg.RequestID, msg.SessionID)
+		return
+	}
+	if msg.Status == "processed" {
+		if pending.ReceiptStatus == "confirmed" {
+			return
+		}
+		pending.ReceiptStatus = "confirmed"
+		h.sendStatus(pending, "confirmed", h.now())
+		return
+	}
+	if pending.ReceiptStatus != "failed" {
+		pending.ReceiptStatus = "failed"
+		h.sendStatus(pending, "failed", h.now())
+	}
+}
+
+func (h *Hub) closeSession(session *Session, reason string) {
+	if session == nil || session.State == SessionClosed {
+		return
+	}
+	session.Close(reason)
+	delete(h.state.pairSessions, PairKey(session.AID, session.BID))
+	h.state.topologyVersion++
+	h.sendSessionChanged(session)
+	h.broadcastTopology()
+	h.failPendingForSession(session, h.now())
+}
+
+func (h *Hub) failPendingForSession(session *Session, now time.Time) {
+	for _, pending := range h.state.pending {
+		if pending.SessionID != session.ID {
+			continue
+		}
+		if pending.ReceiptStatus == "pending" || pending.ReceiptStatus == "unconfirmed" {
+			pending.ReceiptStatus = "failed"
+			h.sendStatus(pending, "failed", now)
+		}
+	}
+}
+
+func (h *Hub) expire(now time.Time) {
+	for _, session := range h.state.sessions {
+		if session.State != SessionInvited && session.State != SessionNegotiating {
+			continue
+		}
+		if session.ExpiresAt.IsZero() || now.Before(session.ExpiresAt) {
+			continue
+		}
+		reason := "invite_timeout"
+		if session.State == SessionNegotiating {
+			reason = "key_timeout"
+		}
+		h.closeSession(session, reason)
+	}
+	ackTimeout := h.cfg.AckTimeout
+	if ackTimeout <= 0 {
+		ackTimeout = 5 * time.Second
+	}
+	for _, pending := range h.state.pending {
+		if pending.ReceiptStatus != "pending" {
+			continue
+		}
+		if !now.Before(pending.AcceptedAt.Add(ackTimeout)) {
+			pending.ReceiptStatus = "unconfirmed"
+			h.sendStatus(pending, "unconfirmed", now)
+		}
+	}
+}
+
+func (h *Hub) sendSessionChanged(session *Session) {
+	view := h.sessionView(session)
+	for _, participantID := range []string{session.AID, session.BID} {
+		conn, ok := h.connectionFor(participantID)
+		if !ok {
+			continue
+		}
+		h.send(conn, &protocol.SessionChanged{
+			V:               1,
+			Type:            "session.changed",
+			RoundID:         h.state.round.ID,
+			ConnectionEpoch: conn.Epoch,
+			Session:         view,
+		})
+	}
+}
+
+func (h *Hub) sessionView(session *Session) protocol.SessionView {
+	return protocol.SessionView{
+		SessionID:    session.ID,
+		AID:          session.AID,
+		BID:          session.BID,
+		Mode:         session.Mode,
+		State:        string(session.State),
+		CreatedAtUTC: formatUTC(session.CreatedAt),
+		ExpiresAtUTC: formatUTC(session.ExpiresAt),
+		ClosedReason: session.ClosedReason,
+	}
+}
+
+func (h *Hub) sendStatus(pending *pendingMessage, status string, at time.Time) {
+	conn, ok := h.connectionFor(pending.SenderID)
+	if !ok {
+		return
+	}
+	h.send(conn, &protocol.ChatStatus{
+		V:               1,
+		Type:            "chat.status",
+		RoundID:         h.state.round.ID,
+		ConnectionEpoch: conn.Epoch,
+		SessionID:       pending.SessionID,
+		MessageID:       pending.MessageID,
+		Status:          status,
+		AtUTC:           formatUTC(at),
+	})
+}
+
+func (h *Hub) broadcastActivity(event protocol.ActivityEvent) {
+	for _, conn := range h.state.connections {
+		if conn.State != ConnectionStudent || conn.ParticipantID == "" {
+			continue
+		}
+		participant, ok := h.state.participants[conn.ParticipantID]
+		if !ok || !participant.IsOnline() {
+			continue
+		}
+		h.send(conn, &protocol.ActivityBatch{
+			V:               1,
+			Type:            "activity.batch",
+			RoundID:         h.state.round.ID,
+			ConnectionEpoch: conn.Epoch,
+			Events:          []protocol.ActivityEvent{event},
+		})
+	}
+}
+
+func (h *Hub) connectionFor(participantID string) (*Connection, bool) {
+	participant, ok := h.state.participants[participantID]
+	if !ok || !participant.IsOnline() || participant.ConnectionEpoch == "" {
+		return nil, false
+	}
+	conn, ok := h.state.connections[participant.ConnectionEpoch]
+	if !ok || !conn.IsOpen() || conn.ParticipantID != participantID {
+		return nil, false
+	}
+	return conn, true
+}
+
+func (h *Hub) openSessionCount(participantID string) int {
+	count := 0
+	for _, session := range h.state.sessions {
+		if session.IsOpen() && session.Contains(participantID) {
+			count++
+		}
+	}
+	return count
+}
+
+func pendingKey(sessionID, senderID, messageID string) string {
+	return sessionID + "|" + senderID + "|" + messageID
+}
+
+func formatUTC(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format("2006-01-02T15:04:05.000Z")
+}
 func (h *Hub) requireStudent(conn *Connection) *protocol.Error {
 	if conn.State != ConnectionStudent || conn.ParticipantID == "" {
 		return &protocol.Error{Code: protocol.CodeNotMember, Message: "connection has not joined"}
@@ -483,13 +1022,7 @@ func (h *Hub) publicSnapshot() publicSnapshotData {
 		if session.State == SessionClosed {
 			continue
 		}
-		sessions = append(sessions, protocol.SessionView{
-			SessionID: session.ID,
-			AID:       session.AID,
-			BID:       session.BID,
-			Mode:      session.Mode,
-			State:     string(session.State),
-		})
+		sessions = append(sessions, h.sessionView(session))
 	}
 	sort.Slice(sessions, func(i, j int) bool { return sessions[i].SessionID < sessions[j].SessionID })
 	return publicSnapshotData{participants: participants, sessions: sessions}
@@ -541,13 +1074,15 @@ func (h *Hub) allocateShortID(participantID string) (string, bool) {
 	return "", false
 }
 
-func (h *Hub) send(conn *Connection, message any) {
+func (h *Hub) send(conn *Connection, message any) error {
 	if conn == nil || conn.Peer == nil {
-		return
+		return errors.New("connection has no peer")
 	}
 	if err := conn.Peer.Send(message); err != nil {
 		conn.Peer.Close("slow_client")
+		return err
 	}
+	return nil
 }
 
 func (h *Hub) sendError(conn *Connection, code protocol.Code, message, requestID, sessionID string) {
@@ -560,7 +1095,6 @@ func (h *Hub) sendError(conn *Connection, code protocol.Code, message, requestID
 }
 
 func (h *Hub) shutdown() {
-	h.markDone()
 	for _, conn := range h.state.connections {
 		conn.Close()
 		if conn.Peer != nil {
@@ -569,6 +1103,7 @@ func (h *Hub) shutdown() {
 	}
 	h.state.connections = make(map[string]*Connection)
 	h.logger.Debug("hub stopped", "round_id", h.state.round.ID)
+	h.markDone()
 }
 
 func (h *Hub) snapshot() Snapshot {
