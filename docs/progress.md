@@ -370,7 +370,23 @@
   - J08/J09 需 Android/iPhone 真机；J11 需实际 U 盘与教室环境；K01/K02 依赖现场。
   - J07 为浏览器级请求阻断，不是 OS 级 WAN 断网。
   - J10 模拟客户端只证明服务端/协议，不证明课堂 Wi-Fi 承载 100 台手机。
-  - 现场候选包：`dist/traffic-classroom-0.1.0-dev/`，EXE SHA-256 `DFC5929D891054A56B3E5330174AECBD352353EC6598A636181191BEC78EEF13`，提交 `7e9e55d`；J08/J09/J11/K01/K02 使用 `docs/field-checklist.md` 执行。
+  - 现场候选包：`dist/traffic-classroom-0.1.0-dev/`，EXE SHA-256 `A471183CF51B406AAE5B2CD776F553DB5D20DF3BB7E8A271B37D267ACA7046F2`，提交 `f4fce49`；J08/J09/J11/K01/K02 使用 `docs/field-checklist.md` 执行。
+
+### 2026-10-23 拓扑布局与缩放优化
+
+- 需求：三节点两两相连时边不重合、可分别点击；拓扑文字过小，需要可视化放大。
+- 实现：
+  - `web/src/graph/layout.ts`：黄金角同心环 100 个稳定槽位（半径/容量 120/8、200/14、280/20、360/26、430/32），固定环顺序 0→2→4→1→3；新节点只取未占用槽位，旧节点不移动。
+  - `web/src/graph/zoom.ts`：锚点缩放、适应包围盒、缩放钳制和中心平移钳制。
+  - `web/src/graph/graph.ts`：SVG viewport、工具栏（−/百分比/+/适应/全屏）、滚轮/拖拽/双指缩放、点击会话聚焦、ESC 退出全屏、语义标签、20px 透明边热区与悬停高亮。
+  - 学生/教师选择会话时自动聚焦该边；节点半径 30，昵称 16px，短编号 12px。
+- 验证：
+  - 三节点位置面积 `144421`（非共线）；教师端 3 条边分别选中 3 个不同会话。
+  - 工具栏 + 后 scale `1.92→2.30`；适应、全屏、ESC、3 个节点标签可见均通过。
+  - Playwright 教师观察回归、LAN HTTP 明文/加密/长文本/多会话/360px 回归通过，无页面错误。
+  - Vitest 53 项通过；`go vet`、`go test -race ./...` 通过。
+  - 新发布包 SHA-256 `A471183CF51B406AAE5B2CD776F553DB5D20DF3BB7E8A271B37D267ACA7046F2`。
+- 限制：双指捏合仅实现 Pointer Events，未在真实手机触摸屏验证；100 节点标签降级需现场投屏复核。
 
 ## 4. 交接约定
 
@@ -379,6 +395,8 @@
 3. 协议修改同步 Go 类型、TypeScript 类型、`docs/protocol.md`、`docs/crypto-and-observation.md` 和受影响验收样例。
 4. 依赖调整更新锁文件和版本清单，最终构建重新生成 SHA-256。
 5. 未执行的手机、教室、U 盘检查保持“待验证”。
+
+
 
 
 
