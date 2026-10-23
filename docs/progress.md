@@ -10,7 +10,7 @@
 | 阶段 | 任务数 | 已完成 | 进行中 | 待执行 | 阻塞 |
 | --- | --- | --- | --- | --- | --- |
 | A 范围和契约 | 6 | 6 | 0 | 0 | 0 |
-| B 最小服务和 LAN 验证 | 8 | 0 | 0 | 8 | 0 |
+| B 最小服务和 LAN 验证 | 8 | 7 | 0 | 1 | 0 |
 | C 状态中心和参与者接入 | 9 | 0 | 0 | 9 | 0 |
 | D 会话和明文闭环 | 10 | 0 | 0 | 10 | 0 |
 | E 浏览器真实加密闭环 | 10 | 0 | 0 | 10 | 0 |
@@ -21,7 +21,7 @@
 | J 主要风险验证 | 12 | 0 | 0 | 12 | 0 |
 | K 课堂演练和交付 | 5 | 0 | 0 | 5 | 0 |
 | X 可选扩展 | 4 | 0 | 0 | 4 | 0 |
-| 合计（V1） | 96 | 6 | 0 | 90 | 0 |
+| 合计（V1） | 96 | 13 | 0 | 83 | 0 |
 
 ## 2. 任务状态
 
@@ -40,13 +40,13 @@
 
 | 编号 | 原子任务 | 状态 | 交付物 | 验证证据 | 阻塞或后续 |
 | --- | --- | --- | --- | --- | --- |
-| B01 | 建立 Go 工程并锁定服务端依赖 | 待执行 | go.mod、go.sum、入口骨架 | 开发机构建空服务；记录版本 | 无 |
-| B02 | 建立双入口 TypeScript 构建工程 | 待执行 | web 工程、锁文件、构建脚本 | 学生/教师页面静态产物 | 无 |
-| B03 | 前端产物嵌入程序并提供静态访问 | 待执行 | internal/web 资源模块 | 删除外部 dist 后已构建程序仍可提供页面 | 无 |
-| B04 | 启动公共和本机双监听器 | 待执行 | 监听器与端口错误处理 | 公共可绑定 LAN；管理仅 loopback | 无 |
-| B05 | 最小 WebSocket 往返入口 | 待执行 | echo 和来源校验 | 网页实际往返；非法 Origin/过大消息拒绝；压缩关闭 | 无 |
-| B06 | 枚举候选网卡并生成二维码 | 待执行 | 地址选择与本地二维码组件 | 二维码与复制地址一致；排除 loopback | 现场地址待 B08 |
-| B07 | 最早可运行的 Windows 开发包 | 待执行 | 开发版 EXE 与启动提示 | 目标 Windows 双击启动；无开发运行时；端口冲突可读 | 无 |
+| B01 | 建立 Go 工程并锁定服务端依赖 | 已完成 | go.mod、go.sum、入口骨架 | `go test ./...` 通过；锁定 Go 1.22.6、coder/websocket v1.8.13 | 无 |
+| B02 | 建立双入口 TypeScript 构建工程 | 已完成 | web 工程、package-lock.json、vite.config.ts | `npm ci`、`npm test`、`npm run typecheck`、`npm run build` 均通过；生成 index/teacher 两入口 | 无 |
+| B03 | 前端产物嵌入程序并提供静态访问 | 已完成 | internal/web 资源模块、fallback 页面 | 单元测试覆盖内嵌页面/资源/路径穿越；删除外部 `web/dist` 后 EXE 仍返回页面与 JS | 无 |
+| B04 | 启动公共和本机双监听器 | 已完成 | internal/transport Server | 双监听器单元测试通过；真实 EXE 同时开放 18080/18081；教师端拒绝非 loopback Host | 无 |
+| B05 | 最小 WebSocket 往返入口 | 已完成 | /ws echo、Origin 校验、读上限 | 6 项 WS 测试通过（往返、非法/缺失 Origin、二进制、超限、无压缩）；真实 EXE 用 PowerShell ClientWebSocket 收到相同回显 | 开发期 echo 将在 C 阶段替换为正式协议 |
+| B06 | 枚举候选网卡并生成二维码 | 已完成 | internal/platform、teacher-info API、teacher 页面二维码组件 | 单元测试覆盖候选排序/显式选择/排除 loopback/虚拟网卡识别；真实 EXE 返回 WLAN 192.168.5.5 与候选列表；前端构建打包 qrcode | 二维码视觉与手机扫码待 B08 真机验证 |
+| B07 | 最早可运行的 Windows 开发包 | 已完成 | scripts/build.ps1、bin/traffic-classroom.exe、启动提示 | Windows 10 19045 x64 构建成功；EXE 自包含运行并完成 API/页面/WS；端口冲突输出可读提示；SHA-256 已记录 | 自动打开默认浏览器未在无头验证中实际观察；真机双击待 B08/K01 |
 | B08 | 实际教室网络验证 HTTP/WS | 待执行 | 真实手机访问记录 | 两部手机完成页面加载和往返 | 需真机与教室网络；不能由开发机替代 |
 
 ### 阶段 C 状态中心和参与者接入
@@ -193,6 +193,20 @@
 - 验证：逐项对照实施计划的 R01—R10、状态模型、消息族、限额、nonce 规则、观察字段和 AC01—AC17；未发现契约冲突。
 - 限制：仅为文档冻结，未执行任何代码、真机或现场验证。B08/J08/J09/J11/K01/K02 仍待真实环境。
 - 后续：B01/B02 建立工程骨架时，Go 与 TypeScript 类型必须与 A04/A05 同步。
+
+### 2026-10-23 B01—B07
+
+- 实现：Go 1.22 工程与 coder/websocket v1.8.13；Vite 7.3.7 + TypeScript 5.9.3 双入口学生/教师页面；内嵌静态资源与 fallback；学生/教师双监听器；`/ws` 开发期 echo、Origin 与 Host 校验、64 KiB 读上限、关闭压缩；网卡候选枚举与选择；教师端学生 URL/候选地址 API 和本地二维码组件；Windows 构建脚本与自包含 EXE。
+- 验证：
+  - `go vet ./...`、`go test -race ./...` 全部通过（config/platform/web/transport/cmd）。
+  - `npm test`（9 项 URL 测试）、`npm run typecheck`、`npm run build` 通过。
+  - 真实 EXE：`/healthz` 200；`/api/teacher-info` 返回 `student_url=http://192.168.5.5:18080/`、protocol=1、候选含 WLAN；学生页引用内嵌 `/assets/student-*.js`；PowerShell ClientWebSocket 收到相同 echo；删除外部 `web/dist` 后页面与资源仍正常。
+  - 构建产物：`bin/traffic-classroom.exe`，SHA-256 `637E1C94788EA821BCB5E6BD06C4D5FC875FC11025D2F81B0839F58A777FD326`，版本 `0.1.0-dev`。
+- 限制：
+  - 未在真实手机或教室网络验证（B08 待执行）；二维码只验证到生成组件与地址一致性，未扫码。
+  - 自动打开教师页的 OS 行为未在无头会话中观察；启动代码已调用 `rundll32 url.dll,FileProtocolHandler`。
+  - `/ws` 目前是开发期 echo，不是 A04 正式协议；C 阶段会替换。
+  - 控制台已设置 UTF-8 代码页；不同终端/重定向的编码显示仍可能受宿主影响。
 
 ## 4. 交接约定
 

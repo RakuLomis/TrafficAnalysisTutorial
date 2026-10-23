@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>加密流量课堂 · 教师端</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">本机受保护入口</p>
+          <h1>加密流量课堂</h1>
+        </div>
+        <span class="badge badge-teacher">教师端</span>
+      </header>
+
+      <main class="teacher-grid">
+        <section class="card">
+          <h2>学生入口</h2>
+          <p id="teacher-config-status" class="muted">正在读取服务配置…</p>
+          <div class="url-row">
+            <code id="student-url">未取得地址</code>
+            <button id="copy-button" type="button" disabled>复制</button>
+          </div>
+          <div class="qr-frame">
+            <img id="qr-image" alt="学生入口二维码" hidden />
+            <p id="qr-placeholder" class="muted">二维码生成中…</p>
+          </div>
+          <label class="field">
+            <span>二维码使用的网卡地址</span>
+            <select id="iface-select" disabled>
+              <option value="">读取中…</option>
+            </select>
+          </label>
+          <p id="iface-note" class="muted"></p>
+        </section>
+
+        <section class="card">
+          <h2>课堂状态</h2>
+          <dl class="facts">
+            <div><dt>协议版本</dt><dd id="protocol-version">—</dd></div>
+            <div><dt>课堂状态</dt><dd id="round-status">—</dd></div>
+            <div><dt>轮次 ID</dt><dd id="round-id">—</dd></div>
+            <div><dt>教师服务</dt><dd>仅本机 127.0.0.1</dd></div>
+          </dl>
+          <p id="teacher-ws-status" class="muted">教师鉴权与观察将在后续任务开放。</p>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/teacher/main.ts"></script>
+  </body>
+</html>

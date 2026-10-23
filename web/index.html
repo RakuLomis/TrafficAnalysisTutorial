@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>加密流量课堂 · 学生端</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">局域网教学演示</p>
+          <h1>加密流量课堂</h1>
+        </div>
+        <span class="badge">学生端</span>
+      </header>
+
+      <main class="stack">
+        <section class="card">
+          <h2>加入课堂</h2>
+          <p id="config-status" class="muted">正在读取课堂配置…</p>
+          <label class="field">
+            <span>临时昵称</span>
+            <input id="nickname" maxlength="16" autocomplete="off" placeholder="1—16 个字符" />
+          </label>
+          <button id="join-button" type="button" disabled>加入（后续任务开放）</button>
+          <p id="crypto-status" class="muted"></p>
+        </section>
+
+        <section class="card">
+          <h2>连接自检</h2>
+          <p class="muted">验证本机浏览器到服务端的 WebSocket 往返；不发送昵称或聊天内容。</p>
+          <button id="echo-button" type="button">测试 WebSocket 往返</button>
+          <p id="ws-status" class="muted">尚未测试</p>
+          <pre id="echo-log" class="log" aria-live="polite"></pre>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/student/main.ts"></script>
+  </body>
+</html>

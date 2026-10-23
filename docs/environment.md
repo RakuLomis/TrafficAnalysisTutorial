@@ -21,6 +21,20 @@
 
 开发机同时存在多个 `169.254.*` 链路本地地址和虚拟网卡。程序不能把这类地址当作默认课堂入口；地址选择必须排除 loopback 并允许教师显式更换。
 
+### 1.1 已锁定依赖版本
+
+| 依赖 | 锁定版本 | 锁定文件 |
+| --- | --- | --- |
+| Go | 1.22.6（`GOTOOLCHAIN=local`） | `go.mod` |
+| coder/websocket | v1.8.13 | `go.mod`、`go.sum` |
+| Vite | 7.3.7 | `web/package-lock.json` |
+| TypeScript | 5.9.3 | `web/package-lock.json` |
+| Vitest | 5.0.5 | `web/package-lock.json` |
+| TweetNaCl.js | 1.0.3 | `web/package-lock.json` |
+| qrcode | 1.5.4 / @types/qrcode 1.5.6 | `web/package-lock.json` |
+
+不使用 `latest`。构建脚本先执行 `npm ci`，再执行 Go 构建；`GOTOOLCHAIN=local` 防止构建时隐式下载新工具链。
+
 ## 2. 尚未验证的环境（保持待确认）
 
 | 项目 | 状态 | 验证方式 |
