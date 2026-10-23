@@ -44,8 +44,10 @@ type Hub struct {
 	shutdownOnce     sync.Once
 	shutdownRequests chan struct{}
 
-	operations     map[string]operationResult
-	operationOrder []string
+	operations        map[string]operationResult
+	operationOrder    []string
+	pendingActivity   []protocol.ActivityEvent
+	activityScheduled bool
 
 	startedAt time.Time
 	observe   *observe.Store
@@ -153,6 +155,12 @@ type pendingMessage struct {
 	CiphertextB64 string
 	AcceptedAt    time.Time
 	ReceiptStatus string
+}
+
+type flushActivityCommand struct{}
+
+func (flushActivityCommand) apply(h *Hub) {
+	h.flushActivity()
 }
 
 type MessageCommand struct {
@@ -887,6 +895,8 @@ func (h *Hub) performRound(action string) (protocol.RoundView, error) {
 	h.state.dedup = make(map[string]*dedupCache)
 	h.state.pending = make(map[string]*pendingMessage)
 	h.state.nextColor = 0
+	h.pendingActivity = nil
+	h.activityScheduled = false
 	h.state.topologyVersion++
 	h.observe.Reset()
 	status := RoundRunning
@@ -1532,6 +1542,34 @@ func (h *Hub) sendStatus(pending *pendingMessage, status string, at time.Time) {
 }
 
 func (h *Hub) broadcastActivity(event protocol.ActivityEvent) {
+	h.pendingActivity = append(h.pendingActivity, event)
+	if h.activityScheduled {
+		return
+	}
+	h.activityScheduled = true
+	time.AfterFunc(50*time.Millisecond, func() {
+		_ = h.Submit(context.Background(), flushActivityCommand{})
+	})
+}
+
+func (h *Hub) flushActivity() {
+	events := h.pendingActivity
+	h.pendingActivity = nil
+	h.activityScheduled = false
+	for len(events) > 0 {
+		size := len(events)
+		if size > 32 {
+			size = 32
+		}
+		h.sendActivityBatch(events[:size])
+		events = events[size:]
+	}
+}
+
+func (h *Hub) sendActivityBatch(events []protocol.ActivityEvent) {
+	if len(events) == 0 {
+		return
+	}
 	for _, conn := range h.state.connections {
 		if conn.State != ConnectionStudent || conn.ParticipantID == "" {
 			continue
@@ -1545,7 +1583,7 @@ func (h *Hub) broadcastActivity(event protocol.ActivityEvent) {
 			Type:            "activity.batch",
 			RoundID:         h.state.round.ID,
 			ConnectionEpoch: conn.Epoch,
-			Events:          []protocol.ActivityEvent{event},
+			Events:          append([]protocol.ActivityEvent(nil), events...),
 		})
 	}
 }

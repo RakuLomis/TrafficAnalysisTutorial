@@ -107,6 +107,7 @@ func submitChatWS(t *testing.T, h *Hub, epoch, sessionID, messageID, seq string,
 		t.Fatalf("chat: %v", err)
 	}
 	processPending(t, h)
+	flushActivity(t, h)
 }
 
 func TestObserverSnapshotAndEvents(t *testing.T) {

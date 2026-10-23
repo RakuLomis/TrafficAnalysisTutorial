@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -99,6 +100,23 @@ func submitChat(t *testing.T, h *Hub, epoch, sessionID, messageID, seq string, t
 	}
 	if err := h.Submit(context.Background(), MessageCommand{Epoch: epoch, Message: msg}); err != nil {
 		t.Fatalf("chat.send: %v", err)
+	}
+	processPending(t, h)
+	flushActivity(t, h)
+}
+
+type activityCommand struct {
+	event protocol.ActivityEvent
+}
+
+func (c activityCommand) apply(h *Hub) {
+	h.broadcastActivity(c.event)
+}
+
+func flushActivity(t *testing.T, h *Hub) {
+	t.Helper()
+	if err := h.Submit(context.Background(), flushActivityCommand{}); err != nil {
+		t.Fatalf("flush activity: %v", err)
 	}
 	processPending(t, h)
 }
@@ -704,5 +722,32 @@ func TestKeyTimeoutClosesNegotiatingSession(t *testing.T) {
 	closed := lastSessionChangedFor(t, fixture.aPeer, sessionID)
 	if closed.Session.State != string(SessionClosed) || closed.Session.ClosedReason != "key_timeout" {
 		t.Fatalf("session = %+v", closed.Session)
+	}
+}
+
+func TestSlowStudentDoesNotBlockOthers(t *testing.T) {
+	h, _ := startTestHub(t, func() time.Time { return fixedTime() })
+	fixture := setupPair(t, h)
+	fixture.bPeer.mu.Lock()
+	fixture.bPeer.sendErr = errors.New("slow client")
+	fixture.bPeer.mu.Unlock()
+
+	event := protocol.ActivityEvent{
+		SessionID: newEpoch(t),
+		MessageID: newEpoch(t),
+		SenderID:  fixture.aID,
+		Direction: "a_to_b",
+		AtUTC:     "2026-10-23T03:00:00.000Z",
+	}
+	if err := h.Submit(context.Background(), activityCommand{event: event}); err != nil {
+		t.Fatalf("activity: %v", err)
+	}
+	flushActivity(t, h)
+
+	if _, ok := findOptional[*protocol.ActivityBatch](fixture.aPeer); !ok {
+		t.Fatal("healthy peer did not receive activity")
+	}
+	if !fixture.bPeer.isClosed() {
+		t.Fatal("slow peer was not closed")
 	}
 }

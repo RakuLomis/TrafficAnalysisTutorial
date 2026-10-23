@@ -13,15 +13,19 @@ import (
 )
 
 type fakePeer struct {
-	mu     sync.Mutex
-	closed bool
-	sent   []any
-	reason string
+	mu      sync.Mutex
+	closed  bool
+	sent    []any
+	reason  string
+	sendErr error
 }
 
 func (p *fakePeer) Send(message any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.sendErr != nil {
+		return p.sendErr
+	}
 	p.sent = append(p.sent, message)
 	return nil
 }
