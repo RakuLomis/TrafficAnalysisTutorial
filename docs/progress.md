@@ -351,7 +351,7 @@
   - `go test ./...`（含控制台命令测试）、前端构建、package 脚本通过。
   - 从 `C:\Users\...\Temp\opencode\加密 课堂\traffic-classroom.exe` 启动，工作目录设为 `C:\Windows`：`/healthz` 200、学生页含内嵌资源、教师 API 返回 LAN URL。
   - 发布目录生成：EXE、README、classroom-card、THIRD_PARTY_NOTICES、licenses、VERSION、SHA256SUMS。
-  - 当前 EXE SHA-256 `DA4BE735C8ACF005A338053038566F03152903B1D8EEE216EE6E8EFC818A44AE`。
+  - 当前 EXE SHA-256 `E9ABD5C41FE9D440A1D3329250742E7662AAF75BE674FC1FBB7BDF23EC7796C3`。
 - 限制：
   - 自动打开默认浏览器未在无头会话实际观察；控制台重开命令已单测。
   - 实际 U 盘与中文/空格盘符的现场验收在 J11。
@@ -364,6 +364,7 @@
 3. 协议修改同步 Go 类型、TypeScript 类型、`docs/protocol.md`、`docs/crypto-and-observation.md` 和受影响验收样例。
 4. 依赖调整更新锁文件和版本清单，最终构建重新生成 SHA-256。
 5. 未执行的手机、教室、U 盘检查保持“待验证”。
+
 
 
 
