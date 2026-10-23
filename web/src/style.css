@@ -591,3 +591,148 @@ button.secondary:hover:not(:disabled) {
   }
 }
 
+
+.teacher-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: 16px;
+}
+
+.teacher-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.observer-card h3 {
+  margin: 18px 0 4px;
+  font-size: 0.95rem;
+}
+
+.small {
+  font-size: 0.78rem;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.stat-card {
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.stat-card span {
+  color: #64748b;
+  font-size: 0.72rem;
+}
+
+.stat-card strong {
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.timeline {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.timeline-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.72rem;
+  color: #475569;
+}
+
+.timeline-label,
+.timeline-size {
+  white-space: nowrap;
+}
+
+.timeline-track {
+  height: 12px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.timeline-bar {
+  height: 100%;
+  border-radius: 999px;
+  min-width: 2px;
+}
+
+.timeline-bar.direction-a {
+  background: #2563eb;
+}
+
+.timeline-bar.direction-b {
+  background: #db2777;
+}
+
+.observer-messages {
+  display: grid;
+  gap: 8px;
+  max-height: 420px;
+  overflow: auto;
+  padding: 4px;
+}
+
+.observer-record {
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 8px;
+}
+
+.observer-record-head {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #334155;
+}
+
+.observer-record-meta {
+  color: #64748b;
+  font-size: 0.72rem;
+  margin: 2px 0 6px;
+}
+
+.observer-body {
+  margin: 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 0.72rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
+}
+
+@media (max-width: 980px) {
+  .teacher-top,
+  .teacher-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

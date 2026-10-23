@@ -8,16 +8,22 @@ export interface GraphCallbacks {
   onSelectPeer: (participantID: string) => void
 }
 
+export interface GraphOptions {
+  allowAllEdges?: boolean
+}
+
 export class GraphView {
   #svg: SVGSVGElement
   #callbacks: GraphCallbacks
   #positions = new Map<string, Point>()
   #sessions = new Map<string, SessionView>()
   #pulses = new Set<string>()
+  #allowAllEdges: boolean
 
-  constructor(svg: SVGSVGElement, callbacks: GraphCallbacks) {
+  constructor(svg: SVGSVGElement, callbacks: GraphCallbacks, options: GraphOptions = {}) {
     this.#svg = svg
     this.#callbacks = callbacks
+    this.#allowAllEdges = options.allowAllEdges ?? false
   }
 
   render(participants: ParticipantView[], sessions: SessionView[], selfID: string, activeSessionID: string | null): void {
@@ -39,15 +45,16 @@ export class GraphView {
         continue
       }
       const own = session.a_id === selfID || session.b_id === selfID
+      const clickable = own || this.#allowAllEdges
       const line = createSvg('line', {
         x1: String(a.x),
         y1: String(a.y),
         x2: String(b.x),
         y2: String(b.y),
-        class: `graph-edge edge-${session.mode} state-${session.state.toLowerCase()}${own ? ' own' : ''}${session.session_id === activeSessionID ? ' active' : ''}${own ? ' clickable' : ''}`,
+        class: `graph-edge edge-${session.mode} state-${session.state.toLowerCase()}${own ? ' own' : ''}${session.session_id === activeSessionID ? ' active' : ''}${clickable ? ' clickable' : ''}`,
       })
       line.append(svgText('title', {}, `${session.mode === 'encrypted' ? '加密' : '明文'} · ${stateLabel(session.state)}`))
-      if (own) {
+      if (clickable) {
         line.addEventListener('click', () => this.#callbacks.onSelectSession(session.session_id))
       }
       edgeLayer.append(line)
@@ -159,4 +166,5 @@ function stateLabel(state: SessionView['state']): string {
 }
 
 export { GRAPH_HEIGHT, GRAPH_WIDTH }
+
 

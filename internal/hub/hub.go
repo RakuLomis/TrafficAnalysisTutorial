@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/config"
+	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/observe"
 	"github.com/RakuLomis/TrafficAnalysisTutorial/internal/protocol"
 )
 
@@ -41,7 +42,9 @@ type Hub struct {
 	done     chan struct{}
 	stopOnce sync.Once
 
-	state hubState
+	startedAt time.Time
+	observe   *observe.Store
+	state     hubState
 }
 
 type hubState struct {
@@ -150,10 +153,11 @@ type pendingMessage struct {
 type MessageCommand struct {
 	Epoch   string
 	Message protocol.Message
+	WSBytes int
 }
 
 func (c MessageCommand) apply(h *Hub) {
-	h.handleMessage(c.Epoch, c.Message)
+	h.handleMessage(c.Epoch, c.Message, c.WSBytes)
 }
 
 type snapshotCommand struct {
@@ -209,12 +213,14 @@ func newHubWithOptions(cfg config.Config, logger *slog.Logger, now func() time.T
 		return nil, fmt.Errorf("create initial round: %w", err)
 	}
 	h := &Hub{
-		cfg:      cfg,
-		options:  options,
-		logger:   logger,
-		now:      now,
-		commands: make(chan Command, 256),
-		done:     make(chan struct{}),
+		cfg:       cfg,
+		options:   options,
+		logger:    logger,
+		now:       now,
+		commands:  make(chan Command, 256),
+		done:      make(chan struct{}),
+		startedAt: round.CreatedAt,
+		observe:   observe.New(cfg.SessionHistoryCount, cfg.SessionHistoryBytes, cfg.GlobalHistoryBytes),
 		state: hubState{
 			round:        round,
 			participants: make(map[string]*Participant),
@@ -367,7 +373,7 @@ func (h *Hub) touch(epoch string, at time.Time) {
 	conn.LastSeen = at
 }
 
-func (h *Hub) handleMessage(epoch string, message protocol.Message) {
+func (h *Hub) handleMessage(epoch string, message protocol.Message, wsBytes int) {
 	conn, ok := h.state.connections[epoch]
 	if !ok || !conn.IsOpen() {
 		return
@@ -388,7 +394,12 @@ func (h *Hub) handleMessage(epoch string, message protocol.Message) {
 		h.handleAdminAuth(conn, msg)
 	default:
 		if conn.State == ConnectionTeacher {
-			h.sendError(conn, protocol.CodeForbidden, "admin action is not available yet", requestIDOf(message), "")
+			switch msg := message.(type) {
+			case *protocol.ObserverSubscribe:
+				h.handleObserverSubscribe(conn, msg)
+			default:
+				h.sendError(conn, protocol.CodeForbidden, "admin action is not available yet", requestIDOf(message), "")
+			}
 			return
 		}
 		if err := h.requireStudent(conn); err != nil {
@@ -409,7 +420,7 @@ func (h *Hub) handleMessage(epoch string, message protocol.Message) {
 		case *protocol.SessionClose:
 			h.handleSessionClose(conn, msg)
 		case *protocol.ChatSend:
-			h.handleChatSend(conn, msg)
+			h.handleChatSend(conn, msg, wsBytes)
 		case *protocol.ChatReceipt:
 			h.handleChatReceipt(conn, msg)
 		case *protocol.KeyPublish:
@@ -670,6 +681,45 @@ func (h *Hub) handleSessionClose(conn *Connection, msg *protocol.SessionClose) {
 	h.closeSession(session, msg.Reason)
 }
 
+func (h *Hub) handleObserverSubscribe(conn *Connection, msg *protocol.ObserverSubscribe) {
+	if msg.SessionID == nil {
+		conn.Subscription = ""
+		h.send(conn, &protocol.ObserverSnapshot{
+			V:         1,
+			Type:      "observer.snapshot",
+			RequestID: msg.RequestID,
+			SessionID: "",
+			Messages:  []protocol.ObserverRecord{},
+		})
+		return
+	}
+	session, ok := h.state.sessions[*msg.SessionID]
+	if !ok {
+		h.sendError(conn, protocol.CodeNotMember, "session not found", msg.RequestID, *msg.SessionID)
+		return
+	}
+	conn.Subscription = session.ID
+	snapshot := protocol.ObserverSnapshot{
+		V:         1,
+		Type:      "observer.snapshot",
+		RequestID: msg.RequestID,
+		SessionID: session.ID,
+		Mode:      string(session.Mode),
+		Messages:  []protocol.ObserverRecord{},
+	}
+	if stored, ok := h.observe.Snapshot(session.ID); ok {
+		snapshot = stored
+		snapshot.V = 1
+		snapshot.Type = "observer.snapshot"
+		snapshot.RequestID = msg.RequestID
+		snapshot.SessionID = session.ID
+		snapshot.Mode = string(session.Mode)
+		if snapshot.Messages == nil {
+			snapshot.Messages = []protocol.ObserverRecord{}
+		}
+	}
+	h.send(conn, &snapshot)
+}
 func (h *Hub) handleKeyPublish(conn *Connection, msg *protocol.KeyPublish) {
 	session, ok := h.state.sessions[msg.SessionID]
 	if !ok || !session.Contains(conn.ParticipantID) {
@@ -805,7 +855,7 @@ func validateEncryptedNonce(nonceB64, seq string, senderIsA bool) (uint64, error
 	}
 	return counter, nil
 }
-func (h *Hub) handleChatSend(conn *Connection, msg *protocol.ChatSend) {
+func (h *Hub) handleChatSend(conn *Connection, msg *protocol.ChatSend, wsBytes int) {
 	session, ok := h.state.sessions[msg.SessionID]
 	if !ok || !session.Contains(conn.ParticipantID) {
 		h.sendError(conn, protocol.CodeNotMember, "session not found", msg.RequestID, msg.SessionID)
@@ -906,6 +956,7 @@ func (h *Hub) handleChatSend(conn *Connection, msg *protocol.ChatSend) {
 		Seq:             msg.Seq,
 		AcceptedAtUTC:   formatUTC(acceptedAt),
 	})
+	h.recordObservation(session, senderID, direction, msg, acceptedAt, wsBytes)
 	h.broadcastActivity(protocol.ActivityEvent{
 		SessionID: session.ID,
 		MessageID: msg.MessageID,
@@ -958,6 +1009,75 @@ func (h *Hub) resendAccepted(conn *Connection, session *Session, senderID, recip
 	})
 }
 
+func (h *Hub) recordObservation(session *Session, senderID, direction string, msg *protocol.ChatSend, acceptedAt time.Time, wsBytes int) {
+	payloadBytes := 0
+	var text *string
+	var nonce *string
+	var ciphertext *string
+	if session.Mode == protocol.ModePlaintext && msg.Text != nil {
+		payloadBytes = len([]byte(*msg.Text))
+		text = msg.Text
+	} else if session.Mode == protocol.ModeEncrypted {
+		if decoded, err := base64.StdEncoding.DecodeString(msg.CiphertextB64); err == nil {
+			payloadBytes = len(decoded)
+		}
+		nonceValue := msg.NonceB64
+		cipherValue := msg.CiphertextB64
+		nonce = &nonceValue
+		ciphertext = &cipherValue
+	}
+	mono := acceptedAt.Sub(h.startedAt).Milliseconds()
+	if mono < 0 {
+		mono = 0
+	}
+	record := protocol.ObserverRecord{
+		SessionID:      session.ID,
+		MessageID:      msg.MessageID,
+		SenderID:       senderID,
+		Direction:      direction,
+		Mode:           string(session.Mode),
+		PayloadBytes:   payloadBytes,
+		WSMessageBytes: wsBytes,
+		AtUTC:          formatUTC(acceptedAt),
+		MonoMS:         mono,
+		ReceiptStatus:  "pending",
+		Text:           text,
+		NonceB64:       nonce,
+		CiphertextB64:  ciphertext,
+	}
+	stored := h.observe.Add(record)
+	h.notifyObserver(stored, false)
+}
+
+func (h *Hub) updateObservationStatus(sessionID, messageID, status string) {
+	stored, changed := h.observe.UpdateReceipt(sessionID, messageID, status)
+	if changed {
+		h.notifyObserver(stored, true)
+	}
+}
+
+func (h *Hub) notifyObserver(record protocol.ObserverRecord, update bool) {
+	stats := protocol.ObserverStats{}
+	truncated := false
+	if snapshot, ok := h.observe.Snapshot(record.SessionID); ok {
+		stats = snapshot.Stats
+		truncated = snapshot.Truncated
+	}
+	for _, conn := range h.state.connections {
+		if conn.State != ConnectionTeacher || conn.Subscription != record.SessionID {
+			continue
+		}
+		h.send(conn, &protocol.ObserverEvent{
+			V:         1,
+			Type:      "observer.event",
+			SessionID: record.SessionID,
+			Message:   record,
+			Update:    update,
+			Stats:     stats,
+			Truncated: truncated,
+		})
+	}
+}
 func (h *Hub) handleChatReceipt(conn *Connection, msg *protocol.ChatReceipt) {
 	session, ok := h.state.sessions[msg.SessionID]
 	if !ok || !session.Contains(conn.ParticipantID) {
@@ -977,12 +1097,14 @@ func (h *Hub) handleChatReceipt(conn *Connection, msg *protocol.ChatReceipt) {
 		}
 		pending.ReceiptStatus = "confirmed"
 		h.sendStatus(pending, "confirmed", h.now())
+		h.updateObservationStatus(session.ID, msg.MessageID, "confirmed")
 		return
 	}
 	if pending.ReceiptStatus != "failed" {
 		pending.ReceiptStatus = "failed"
 		h.sendStatus(pending, "failed", h.now())
 	}
+	h.updateObservationStatus(session.ID, msg.MessageID, "failed")
 	h.closeSession(session, "crypto_failed")
 }
 
@@ -1006,6 +1128,7 @@ func (h *Hub) failPendingForSession(session *Session, now time.Time) {
 		if pending.ReceiptStatus == "pending" || pending.ReceiptStatus == "unconfirmed" {
 			pending.ReceiptStatus = "failed"
 			h.sendStatus(pending, "failed", now)
+			h.updateObservationStatus(pending.SessionID, pending.MessageID, "failed")
 		}
 	}
 }
@@ -1035,6 +1158,7 @@ func (h *Hub) expire(now time.Time) {
 		if !now.Before(pending.AcceptedAt.Add(ackTimeout)) {
 			pending.ReceiptStatus = "unconfirmed"
 			h.sendStatus(pending, "unconfirmed", now)
+			h.updateObservationStatus(pending.SessionID, pending.MessageID, "unconfirmed")
 		}
 	}
 }
@@ -1174,6 +1298,11 @@ func (h *Hub) publicSnapshot() publicSnapshotData {
 		if session.State == SessionClosed {
 			continue
 		}
+		a, okA := h.state.participants[session.AID]
+		b, okB := h.state.participants[session.BID]
+		if !okA || !okB || !a.IsOnline() || !b.IsOnline() {
+			continue
+		}
 		sessions = append(sessions, h.sessionView(session))
 	}
 	sort.Slice(sessions, func(i, j int) bool { return sessions[i].SessionID < sessions[j].SessionID })
@@ -1183,6 +1312,18 @@ func (h *Hub) publicSnapshot() publicSnapshotData {
 func (h *Hub) broadcastTopology() {
 	view := h.publicSnapshot()
 	for _, conn := range h.state.connections {
+		if conn.State == ConnectionTeacher {
+			h.send(conn, &protocol.TopologyChanged{
+				V:               1,
+				Type:            "topology.changed",
+				RoundID:         h.state.round.ID,
+				ConnectionEpoch: conn.Epoch,
+				TopologyVersion: h.state.topologyVersion,
+				Participants:    view.participants,
+				Sessions:        view.sessions,
+			})
+			continue
+		}
 		if conn.State != ConnectionStudent || conn.ParticipantID == "" {
 			continue
 		}

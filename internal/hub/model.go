@@ -218,6 +218,7 @@ type Connection struct {
 	Epoch         string
 	ParticipantID string
 	Admin         bool
+	Subscription  string
 	State         ConnectionState
 	ConnectedAt   time.Time
 	LastSeen      time.Time

@@ -10,19 +10,21 @@ export interface ConnectionHandlers {
 export class ClassroomConnection {
   #handlers: ConnectionHandlers
   #heartbeatMs: number
+  #path: string
   #socket: WebSocket | null = null
   #heartbeat: number | null = null
   #closed = false
 
-  constructor(handlers: ConnectionHandlers, heartbeatMs = 15000) {
+  constructor(handlers: ConnectionHandlers, heartbeatMs = 15000, path = '/ws') {
     this.#handlers = handlers
     this.#heartbeatMs = heartbeatMs
+    this.#path = path
   }
 
   connect(): void {
     this.#closed = false
     const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const socket = new WebSocket(`${scheme}//${location.host}/ws`)
+    const socket = new WebSocket(`${scheme}//${location.host}${this.#path}`)
     this.#socket = socket
 
     socket.addEventListener('open', () => {
@@ -84,3 +86,4 @@ export class ClassroomConnection {
     }
   }
 }
+

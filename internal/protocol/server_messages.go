@@ -184,3 +184,54 @@ type KeyConfirmDeliver struct {
 	NonceB64        string `json:"nonce_b64"`
 	CiphertextB64   string `json:"ciphertext_b64"`
 }
+
+type ObserverRecord struct {
+	SessionID      string  `json:"session_id,omitempty"`
+	MessageID      string  `json:"message_id"`
+	SenderID       string  `json:"sender_id"`
+	Direction      string  `json:"direction"`
+	Mode           string  `json:"mode"`
+	PayloadBytes   int     `json:"payload_bytes"`
+	WSMessageBytes int     `json:"ws_message_bytes"`
+	AtUTC          string  `json:"at_utc"`
+	MonoMS         int64   `json:"mono_ms"`
+	IntervalMS     *int64  `json:"interval_ms"`
+	ReceiptStatus  string  `json:"receipt_status"`
+	Text           *string `json:"text"`
+	NonceB64       *string `json:"nonce_b64"`
+	CiphertextB64  *string `json:"ciphertext_b64"`
+}
+
+type ObserverStats struct {
+	MessageCount        int    `json:"message_count"`
+	PayloadBytesTotal   int64  `json:"payload_bytes_total"`
+	WSMessageBytesTotal int64  `json:"ws_message_bytes_total"`
+	LastDirection       string `json:"last_direction"`
+	DirectionSwitches   int    `json:"direction_switches"`
+	ConfirmedCount      int    `json:"confirmed_count"`
+	UnconfirmedCount    int    `json:"unconfirmed_count"`
+	FailedCount         int    `json:"failed_count"`
+	FirstAtUTC          string `json:"first_at_utc"`
+	LastAtUTC           string `json:"last_at_utc"`
+}
+
+type ObserverSnapshot struct {
+	V         int              `json:"v"`
+	Type      string           `json:"type"`
+	RequestID string           `json:"request_id,omitempty"`
+	SessionID string           `json:"session_id"`
+	Mode      string           `json:"mode"`
+	Stats     ObserverStats    `json:"stats"`
+	Truncated bool             `json:"truncated"`
+	Messages  []ObserverRecord `json:"messages"`
+}
+
+type ObserverEvent struct {
+	V         int            `json:"v"`
+	Type      string         `json:"type"`
+	SessionID string         `json:"session_id"`
+	Message   ObserverRecord `json:"message"`
+	Update    bool           `json:"update"`
+	Stats     ObserverStats  `json:"stats"`
+	Truncated bool           `json:"truncated"`
+}

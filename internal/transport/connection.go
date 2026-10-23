@@ -192,7 +192,7 @@ func (c *Connection) readLoop() {
 			continue
 		}
 		submitCtx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
-		err = c.hub.Submit(submitCtx, hub.MessageCommand{Epoch: c.epoch, Message: message})
+		err = c.hub.Submit(submitCtx, hub.MessageCommand{Epoch: c.epoch, Message: message, WSBytes: len(data)})
 		cancel()
 		if err != nil {
 			c.Close("hub_unavailable")

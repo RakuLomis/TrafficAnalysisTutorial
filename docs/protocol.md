@@ -625,11 +625,25 @@ A→对端转发时结构相同，增加 `sender_id`，不改变 `seq`、`nonce_
     "text": null,
     "nonce_b64": "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     "ciphertext_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-  }
+  },
+  "update": false,
+  "stats": {
+    "message_count": 43,
+    "payload_bytes_total": 8384,
+    "ws_message_bytes_total": 13312,
+    "last_direction": "a_to_b",
+    "direction_switches": 8,
+    "confirmed_count": 41,
+    "unconfirmed_count": 1,
+    "failed_count": 1,
+    "first_at_utc": "2026-10-23T02:00:00.000Z",
+    "last_at_utc": "2026-10-23T02:02:00.000Z"
+  },
+  "truncated": false
 }
 ```
 
-确认状态变化时，A 再发送同一 `message_id` 的 `observer.event`，带 `"update": true` 和新的 `receipt_status`。`update=true` 只更新现有记录，不新增条数、不改变原始时间、长度或累计统计。
+确认状态变化时，A 再发送同一 `message_id` 的 `observer.event`，带 `"update": true` 和新的 `receipt_status`。`update=true` 只更新现有记录，不新增条数、不改变原始时间、长度或累计统计。`stats` 为服务端累计统计，`truncated` 表示该会话历史窗口是否淘汰过旧记录。教师连接在 `admin.welcome` 之后也会收到适用的 `topology.changed`，其 `connection_epoch` 为教师连接自身代次。
 
 ### 8.6 课堂控制
 
@@ -798,3 +812,4 @@ A→对端转发时结构相同，增加 `sender_id`，不改变 `seq`、`nonce_
 ## 13. 协议修改规则
 
 协议修改必须同时更新：Go 类型、TypeScript 类型、本文档、`docs/crypto-and-observation.md`（如涉及）和受影响的验收样例。禁止只改一端。未冻结字段不得在正式界面冒充实测数据。
+

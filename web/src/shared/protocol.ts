@@ -48,6 +48,70 @@ export interface TopologyChanged {
   sessions: SessionView[]
 }
 
+export interface AdminWelcome {
+  v: 1
+  type: 'admin.welcome'
+  request_id: string
+  connection_epoch: string
+  server_version: string
+  protocol_version: number
+  round: RoundView
+  topology_version: number
+  participants: ParticipantView[]
+  sessions: SessionView[]
+}
+
+export interface ObserverRecord {
+  session_id?: string
+  message_id: string
+  sender_id: string
+  direction: 'a_to_b' | 'b_to_a'
+  mode: 'plaintext' | 'encrypted'
+  payload_bytes: number
+  ws_message_bytes: number
+  at_utc: string
+  mono_ms: number
+  interval_ms: number | null
+  receipt_status: 'pending' | 'confirmed' | 'unconfirmed' | 'failed'
+  text: string | null
+  nonce_b64: string | null
+  ciphertext_b64: string | null
+}
+
+export interface ObserverStats {
+  message_count: number
+  payload_bytes_total: number
+  ws_message_bytes_total: number
+  last_direction: string
+  direction_switches: number
+  confirmed_count: number
+  unconfirmed_count: number
+  failed_count: number
+  first_at_utc: string
+  last_at_utc: string
+}
+
+export interface ObserverSnapshot {
+  v: 1
+  type: 'observer.snapshot'
+  request_id?: string
+  session_id: string
+  mode: string
+  stats: ObserverStats
+  truncated: boolean
+  messages: ObserverRecord[]
+}
+
+export interface ObserverEvent {
+  v: 1
+  type: 'observer.event'
+  session_id: string
+  message: ObserverRecord
+  update: boolean
+  stats: ObserverStats
+  truncated: boolean
+}
+
 export interface SessionChanged {
   v: 1
   type: 'session.changed'
@@ -156,6 +220,9 @@ export interface RoundEnded {
 
 export type ServerMessage =
   | Welcome
+  | AdminWelcome
+  | ObserverSnapshot
+  | ObserverEvent
   | TopologyChanged
   | SessionChanged
   | ChatAccepted
@@ -183,3 +250,4 @@ export function parseServerMessage(data: string): ServerMessage | null {
     return null
   }
 }
+
