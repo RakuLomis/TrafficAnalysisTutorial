@@ -1,9 +1,9 @@
-import nacl from 'tweetnacl'
+import { checkCryptoCapabilities } from '../crypto/capabilities'
 
 export function cryptoLibraryAvailable(): boolean {
-  return typeof nacl.box?.keyPair === 'function' && typeof nacl.box?.before === 'function'
+  return checkCryptoCapabilities().box
 }
 
 export function secureRandomAvailable(): boolean {
-  return typeof globalThis.crypto?.getRandomValues === 'function'
+  return checkCryptoCapabilities().secureRandom
 }

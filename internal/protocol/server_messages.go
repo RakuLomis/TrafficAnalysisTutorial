@@ -162,3 +162,25 @@ type ActivityBatch struct {
 	ConnectionEpoch string          `json:"connection_epoch"`
 	Events          []ActivityEvent `json:"events"`
 }
+
+type KeyPublishDeliver struct {
+	V               int    `json:"v"`
+	Type            string `json:"type"`
+	RoundID         string `json:"round_id"`
+	ConnectionEpoch string `json:"connection_epoch"`
+	SessionID       string `json:"session_id"`
+	SenderID        string `json:"sender_id"`
+	PublicKeyB64    string `json:"public_key_b64"`
+}
+
+type KeyConfirmDeliver struct {
+	V               int    `json:"v"`
+	Type            string `json:"type"`
+	RoundID         string `json:"round_id"`
+	ConnectionEpoch string `json:"connection_epoch"`
+	SessionID       string `json:"session_id"`
+	SenderID        string `json:"sender_id"`
+	Seq             string `json:"seq"`
+	NonceB64        string `json:"nonce_b64"`
+	CiphertextB64   string `json:"ciphertext_b64"`
+}

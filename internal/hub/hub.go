@@ -1,12 +1,16 @@
 package hub
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -408,6 +412,12 @@ func (h *Hub) handleMessage(epoch string, message protocol.Message) {
 			h.handleChatSend(conn, msg)
 		case *protocol.ChatReceipt:
 			h.handleChatReceipt(conn, msg)
+		case *protocol.KeyPublish:
+			h.handleKeyPublish(conn, msg)
+		case *protocol.KeyConfirm:
+			h.handleKeyConfirm(conn, msg)
+		case *protocol.KeyReady:
+			h.handleKeyReady(conn, msg)
 		default:
 			h.sendError(conn, protocol.CodeForbidden, "message is not available yet", requestIDOf(message), sessionIDOf(message))
 		}
@@ -660,6 +670,141 @@ func (h *Hub) handleSessionClose(conn *Connection, msg *protocol.SessionClose) {
 	h.closeSession(session, msg.Reason)
 }
 
+func (h *Hub) handleKeyPublish(conn *Connection, msg *protocol.KeyPublish) {
+	session, ok := h.state.sessions[msg.SessionID]
+	if !ok || !session.Contains(conn.ParticipantID) {
+		h.sendError(conn, protocol.CodeNotMember, "session not found", msg.RequestID, msg.SessionID)
+		return
+	}
+	if session.Mode != protocol.ModeEncrypted || session.State != SessionNegotiating {
+		h.sendError(conn, protocol.CodeNotActive, "session is not negotiating", msg.RequestID, msg.SessionID)
+		return
+	}
+	key, err := base64.StdEncoding.DecodeString(msg.PublicKeyB64)
+	if err != nil || len(key) != 32 {
+		h.sendError(conn, protocol.CodeInvalidMessage, "public key must be 32 bytes", msg.RequestID, msg.SessionID)
+		return
+	}
+	senderIsA := conn.ParticipantID == session.AID
+	existing := session.BPublicKey
+	if senderIsA {
+		existing = session.APublicKey
+	}
+	if existing != nil {
+		if !bytes.Equal(existing, key) {
+			h.closeSession(session, "crypto_failed")
+			h.sendError(conn, protocol.CodeCryptoFailed, "public key changed", msg.RequestID, msg.SessionID)
+			return
+		}
+	} else if senderIsA {
+		session.APublicKey = append([]byte(nil), key...)
+	} else {
+		session.BPublicKey = append([]byte(nil), key...)
+	}
+
+	peerConn, ok := h.connectionFor(session.Counterpart(conn.ParticipantID))
+	if !ok {
+		return
+	}
+	h.send(peerConn, &protocol.KeyPublishDeliver{
+		V:               1,
+		Type:            "key.publish",
+		RoundID:         h.state.round.ID,
+		ConnectionEpoch: peerConn.Epoch,
+		SessionID:       session.ID,
+		SenderID:        conn.ParticipantID,
+		PublicKeyB64:    msg.PublicKeyB64,
+	})
+}
+
+func (h *Hub) handleKeyConfirm(conn *Connection, msg *protocol.KeyConfirm) {
+	session, ok := h.state.sessions[msg.SessionID]
+	if !ok || !session.Contains(conn.ParticipantID) {
+		h.sendError(conn, protocol.CodeNotMember, "session not found", msg.RequestID, msg.SessionID)
+		return
+	}
+	if session.Mode != protocol.ModeEncrypted || session.State != SessionNegotiating {
+		h.sendError(conn, protocol.CodeNotActive, "session is not negotiating", msg.RequestID, msg.SessionID)
+		return
+	}
+	if session.APublicKey == nil || session.BPublicKey == nil {
+		h.sendError(conn, protocol.CodeNotActive, "public keys are not ready", msg.RequestID, msg.SessionID)
+		return
+	}
+	counter, err := validateEncryptedNonce(msg.NonceB64, msg.Seq, conn.ParticipantID == session.AID)
+	if err != nil || counter != 0 {
+		h.closeSession(session, "crypto_failed")
+		h.sendError(conn, protocol.CodeCryptoFailed, "invalid key-confirm nonce or seq", msg.RequestID, msg.SessionID)
+		return
+	}
+	peerConn, ok := h.connectionFor(session.Counterpart(conn.ParticipantID))
+	if !ok {
+		return
+	}
+	h.send(peerConn, &protocol.KeyConfirmDeliver{
+		V:               1,
+		Type:            "key.confirm",
+		RoundID:         h.state.round.ID,
+		ConnectionEpoch: peerConn.Epoch,
+		SessionID:       session.ID,
+		SenderID:        conn.ParticipantID,
+		Seq:             msg.Seq,
+		NonceB64:        msg.NonceB64,
+		CiphertextB64:   msg.CiphertextB64,
+	})
+}
+
+func (h *Hub) handleKeyReady(conn *Connection, msg *protocol.KeyReady) {
+	session, ok := h.state.sessions[msg.SessionID]
+	if !ok || !session.Contains(conn.ParticipantID) {
+		h.sendError(conn, protocol.CodeNotMember, "session not found", msg.RequestID, msg.SessionID)
+		return
+	}
+	if session.Mode != protocol.ModeEncrypted || session.State != SessionNegotiating {
+		h.sendError(conn, protocol.CodeNotActive, "session is not negotiating", msg.RequestID, msg.SessionID)
+		return
+	}
+	if msg.Status == "failed" {
+		h.closeSession(session, "crypto_failed")
+		h.sendError(conn, protocol.CodeCryptoFailed, "client reported key verification failure", msg.RequestID, msg.SessionID)
+		return
+	}
+	if session.APublicKey == nil || session.BPublicKey == nil {
+		h.sendError(conn, protocol.CodeNotActive, "public keys are not ready", msg.RequestID, msg.SessionID)
+		return
+	}
+	if conn.ParticipantID == session.AID {
+		session.AReady = true
+	} else {
+		session.BReady = true
+	}
+	if !session.AReady || !session.BReady {
+		return
+	}
+	session.Activate()
+	h.state.topologyVersion++
+	h.sendSessionChanged(session)
+	h.broadcastTopology()
+}
+
+func validateEncryptedNonce(nonceB64, seq string, senderIsA bool) (uint64, error) {
+	nonce, err := base64.StdEncoding.DecodeString(nonceB64)
+	if err != nil || len(nonce) != 24 {
+		return 0, errors.New("invalid nonce")
+	}
+	expectedDirection := byte(1)
+	if senderIsA {
+		expectedDirection = 0
+	}
+	if nonce[0] != expectedDirection {
+		return 0, errors.New("invalid nonce direction")
+	}
+	counter := binary.BigEndian.Uint64(nonce[16:24])
+	if strconv.FormatUint(counter, 10) != seq {
+		return 0, errors.New("seq does not match nonce counter")
+	}
+	return counter, nil
+}
 func (h *Hub) handleChatSend(conn *Connection, msg *protocol.ChatSend) {
 	session, ok := h.state.sessions[msg.SessionID]
 	if !ok || !session.Contains(conn.ParticipantID) {
@@ -685,6 +830,12 @@ func (h *Hub) handleChatSend(conn *Connection, msg *protocol.ChatSend) {
 	case protocol.ModeEncrypted:
 		if msg.Text != nil {
 			h.sendError(conn, protocol.CodeModeMismatch, "encrypted session must not carry text", msg.RequestID, msg.SessionID)
+			return
+		}
+		counter, nonceErr := validateEncryptedNonce(msg.NonceB64, msg.Seq, senderID == session.AID)
+		if nonceErr != nil || counter == 0 {
+			h.closeSession(session, "crypto_failed")
+			h.sendError(conn, protocol.CodeCryptoFailed, "invalid nonce or seq", msg.RequestID, msg.SessionID)
 			return
 		}
 		fingerprint = "e|" + msg.Seq + "|" + msg.NonceB64 + "|" + msg.CiphertextB64
