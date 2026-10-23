@@ -370,6 +370,7 @@
   - J08/J09 需 Android/iPhone 真机；J11 需实际 U 盘与教室环境；K01/K02 依赖现场。
   - J07 为浏览器级请求阻断，不是 OS 级 WAN 断网。
   - J10 模拟客户端只证明服务端/协议，不证明课堂 Wi-Fi 承载 100 台手机。
+  - 现场候选包：`dist/traffic-classroom-0.1.0-dev/`，EXE SHA-256 `DFC5929D891054A56B3E5330174AECBD352353EC6598A636181191BEC78EEF13`，提交 `7e9e55d`；J08/J09/J11/K01/K02 使用 `docs/field-checklist.md` 执行。
 
 ## 4. 交接约定
 
@@ -378,6 +379,7 @@
 3. 协议修改同步 Go 类型、TypeScript 类型、`docs/protocol.md`、`docs/crypto-and-observation.md` 和受影响验收样例。
 4. 依赖调整更新锁文件和版本清单，最终构建重新生成 SHA-256。
 5. 未执行的手机、教室、U 盘检查保持“待验证”。
+
 
 
 
